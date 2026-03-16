@@ -1,0 +1,9 @@
+{
+  "query": "CREATE TABLE IF NOT EXISTS `review_photos` (\n  `id` int AUTO_INCREMENT NOT NULL,\n  `reviewId` int NOT NULL,\n  `photoUrl` text NOT NULL,\n  `caption` text,\n  `createdAt` timestamp NOT NULL DEFAULT (now()),\n  CONSTRAINT `review_photos_id` PRIMARY KEY(`id`)\n);",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway04.us-east-1.prod.aws.tidbcloud.com --port 4000 --user xJX3SwdahUyzqCT.root --database EkeHHMMWrNDmuayMUAjuP3 --execute CREATE TABLE IF NOT EXISTS `review_photos` (\n  `id` int AUTO_INCREMENT NOT NULL,\n  `reviewId` int NOT NULL,\n  `photoUrl` text NOT NULL,\n  `caption` text,\n  `createdAt` timestamp NOT NULL DEFAULT (now()),\n  CONSTRAINT `review_photos_id` PRIMARY KEY(`id`)\n);",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 791
+}

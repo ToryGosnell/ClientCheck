@@ -1,0 +1,8 @@
+{
+  "query": "ALTER TABLE customers MODIFY phone VARCHAR(32) NOT NULL UNIQUE;\nALTER TABLE customers MODIFY address VARCHAR(255) NOT NULL;\nALTER TABLE customers MODIFY city VARCHAR(128) NOT NULL;\nALTER TABLE customers MODIFY state VARCHAR(64) NOT NULL;\nALTER TABLE customers MODIFY zip VARCHAR(16) NOT NULL;\nALTER TABLE customers ADD COLUMN mergedIntoId INT;\nALTER TABLE customers ADD COLUMN isDuplicate BOOLEAN DEFAULT FALSE NOT NULL;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway04.us-east-1.prod.aws.tidbcloud.com --port 4000 --user xJX3SwdahUyzqCT.root --database EkeHHMMWrNDmuayMUAjuP3 --execute ALTER TABLE customers MODIFY phone VARCHAR(32) NOT NULL UNIQUE;\nALTER TABLE customers MODIFY address VARCHAR(255) NOT NULL;\nALTER TABLE customers MODIFY city VARCHAR(128) NOT NULL;\nALTER TABLE customers MODIFY state VARCHAR(64) NOT NULL;\nALTER TABLE customers MODIFY zip VARCHAR(16) NOT NULL;\nALTER TABLE customers ADD COLUMN mergedIntoId INT;\nALTER TABLE customers ADD COLUMN isDuplicate BOOLEAN DEFAULT FALSE NOT NULL;",
+  "returncode": 1,
+  "logs": [
+    "ERROR 8200 (HY000) at line 1: can't change column constraint (UNIQUE KEY)"
+  ]
+}

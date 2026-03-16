@@ -1,0 +1,9 @@
+{
+  "query": "ALTER TABLE reviews ADD COLUMN ratingPaymentReliability INT DEFAULT 0 NOT NULL;\nALTER TABLE reviews ADD COLUMN ratingLawsuitHistory INT DEFAULT 0 NOT NULL;\nALTER TABLE reviews ADD COLUMN ratingPermitPulling INT DEFAULT 0 NOT NULL;\nALTER TABLE reviews ADD COLUMN ratingChargebackHistory INT DEFAULT 0 NOT NULL;\nALTER TABLE reviews ADD COLUMN clientScore INT DEFAULT 0 NOT NULL;\nALTER TABLE reviews ADD COLUMN confirmationCount INT DEFAULT 0 NOT NULL;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway04.us-east-1.prod.aws.tidbcloud.com --port 4000 --user xJX3SwdahUyzqCT.root --database EkeHHMMWrNDmuayMUAjuP3 --execute ALTER TABLE reviews ADD COLUMN ratingPaymentReliability INT DEFAULT 0 NOT NULL;\nALTER TABLE reviews ADD COLUMN ratingLawsuitHistory INT DEFAULT 0 NOT NULL;\nALTER TABLE reviews ADD COLUMN ratingPermitPulling INT DEFAULT 0 NOT NULL;\nALTER TABLE reviews ADD COLUMN ratingChargebackHistory INT DEFAULT 0 NOT NULL;\nALTER TABLE reviews ADD COLUMN clientScore INT DEFAULT 0 NOT NULL;\nALTER TABLE reviews ADD COLUMN confirmationCount INT DEFAULT 0 NOT NULL;",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 3960
+}

@@ -1,0 +1,10 @@
+{
+  "query": "CREATE TABLE messages (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  senderId INT NOT NULL,\n  recipientId INT NOT NULL,\n  text TEXT NOT NULL,\n  read BOOLEAN DEFAULT FALSE NOT NULL,\n  createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL\n);\n\nCREATE TABLE onboarding_status (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  userId INT NOT NULL UNIQUE,\n  profileCompleted BOOLEAN DEFAULT FALSE NOT NULL,\n  tradeSelected BOOLEAN DEFAULT FALSE NOT NULL,\n  verificationSubmitted BOOLEAN DEFAULT FALSE NOT NULL,\n  completedAt TIMESTAMP,\n  createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,\n  updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP NOT NULL\n);",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway04.us-east-1.prod.aws.tidbcloud.com --port 4000 --user xJX3SwdahUyzqCT.root --database EkeHHMMWrNDmuayMUAjuP3 --execute CREATE TABLE messages (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  senderId INT NOT NULL,\n  recipientId INT NOT NULL,\n  text TEXT NOT NULL,\n  read BOOLEAN DEFAULT FALSE NOT NULL,\n  createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL\n);\n\nCREATE TABLE onboarding_status (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  userId INT NOT NULL UNIQUE,\n  profileCompleted BOOLEAN DEFAULT FALSE NOT NULL,\n  tradeSelected BOOLEAN DEFAULT FALSE NOT NULL,\n  verificationSubmitted BOOLEAN DEFAULT FALSE NOT NULL,\n  completedAt TIMESTAMP,\n  createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,\n  updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP NOT NULL\n);",
+  "returncode": 1,
+  "logs": [
+    "ERROR 1064 (42000) at line 1: You have an error in your SQL syntax; check the manual that corresponds to your TiDB version for the right syntax to use line 6 column 7 near \"read BOOLEAN DEFAULT FALSE NOT NULL,",
+    "  createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL",
+    ")\""
+  ]
+}

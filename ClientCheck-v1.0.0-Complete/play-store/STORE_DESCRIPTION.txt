@@ -1,0 +1,21 @@
+Short description
+ClientCheck helps contractors spot risky customers before taking the job.
+
+Full description
+ClientCheck is a contractor risk intelligence app built to help service professionals make better decisions before they schedule work.
+
+Use ClientCheck to:
+- Run pre-job risk checks
+- View customer payment reliability
+- Track disputes and risk alerts
+- Save customer watchlists
+- Manage review evidence and moderation
+- Monitor business insights and contractor reputation
+
+ClientCheck is designed for plumbers, HVAC contractors, electricians, remodelers, landscapers, and other field service businesses that need better visibility into payment, cancellation, and dispute risk.
+
+Important:
+- Negative reviews require evidence
+- Customers can dispute reports
+- Moderation and appeals are built into the platform
+- Access may require account verification

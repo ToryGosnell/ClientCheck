@@ -1,0 +1,9 @@
+{
+  "query": "CREATE TABLE `subscriptions` (\n\t`id` int AUTO_INCREMENT NOT NULL,\n\t`userId` int NOT NULL,\n\t`status` enum('trial','active','cancelled','expired') NOT NULL DEFAULT 'trial',\n\t`trialStartedAt` timestamp NOT NULL DEFAULT (now()),\n\t`trialEndsAt` timestamp NOT NULL,\n\t`subscriptionStartedAt` timestamp,\n\t`subscriptionEndsAt` timestamp,\n\t`paymentMethod` varchar(64),\n\t`createdAt` timestamp NOT NULL DEFAULT (now()),\n\t`updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,\n\tCONSTRAINT `subscriptions_id` PRIMARY KEY(`id`),\n\tCONSTRAINT `subscriptions_userId_unique` UNIQUE(`userId`)\n);",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway04.us-east-1.prod.aws.tidbcloud.com --port 4000 --user xJX3SwdahUyzqCT.root --database EkeHHMMWrNDmuayMUAjuP3 --execute CREATE TABLE `subscriptions` (\n\t`id` int AUTO_INCREMENT NOT NULL,\n\t`userId` int NOT NULL,\n\t`status` enum('trial','active','cancelled','expired') NOT NULL DEFAULT 'trial',\n\t`trialStartedAt` timestamp NOT NULL DEFAULT (now()),\n\t`trialEndsAt` timestamp NOT NULL,\n\t`subscriptionStartedAt` timestamp,\n\t`subscriptionEndsAt` timestamp,\n\t`paymentMethod` varchar(64),\n\t`createdAt` timestamp NOT NULL DEFAULT (now()),\n\t`updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,\n\tCONSTRAINT `subscriptions_id` PRIMARY KEY(`id`),\n\tCONSTRAINT `subscriptions_userId_unique` UNIQUE(`userId`)\n);",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 1489
+}
