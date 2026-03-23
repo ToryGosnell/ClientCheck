@@ -112,11 +112,14 @@ async function startServer() {
       }),
     );
 
-    const port = Number(process.env.PORT) || 3000;
+    const port = process.env.PORT ? Number(process.env.PORT) : 3000;
+
+    console.log("ENV PORT:", process.env.PORT);
+    console.log("Using PORT:", port);
 
     try {
       app.listen(port, () => {
-        console.log(`Server running on port ${port}`);
+        console.log(`[api] server listening on port ${port}`);
       });
     } catch (listenErr) {
       console.error("Startup error:", listenErr);
