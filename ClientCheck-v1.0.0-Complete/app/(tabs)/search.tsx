@@ -20,7 +20,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useSearchLimit } from "@/hooks/use-search-limit";
 import { getApiBaseUrl } from "@/constants/oauth";
 import { DEMO_MODE } from "@/lib/demo-data";
-import { trpc } from "@/lib/trpc";
+import { apiUrl } from "@/lib/api";
 import { computeRiskScore } from "@/lib/risk-score";
 import {
   addRecentSearch,
@@ -42,24 +42,12 @@ const MIN_CHARS = 2;
 const DEBOUNCE_MS = 280;
 const MAX_RESULTS = 15;
 
-/** Surface full tRPC client error in UI (temporary debugging). */
-function formatTrpcQueryError(err: unknown): string {
+/** Surface REST search errors in UI (dev / retry panel). */
+function formatRestSearchError(err: unknown): string {
   if (err == null) return "unknown error";
   if (typeof err === "string") return err;
-  const e = err as {
-    message?: string;
-    cause?: unknown;
-    data?: { code?: string; httpStatus?: number; path?: string; stack?: string };
-    shape?: { message?: string };
-  };
-  const parts: string[] = [];
-  if (e.message) parts.push(e.message);
-  if (e.shape?.message && e.shape.message !== e.message) parts.push(e.shape.message);
-  if (e.data?.httpStatus != null) parts.push(`HTTP ${e.data.httpStatus}`);
-  if (e.data?.code) parts.push(String(e.data.code));
-  if (e.data?.path) parts.push(String(e.data.path));
-  if (e.cause instanceof Error && e.cause.message) parts.push(`cause: ${e.cause.message}`);
-  return parts.length > 0 ? parts.join(" | ") : JSON.stringify(err).slice(0, 600);
+  if (err instanceof Error) return err.message;
+  return JSON.stringify(err).slice(0, 600);
 }
 
 const RISK_BADGE: Record<string, { label: string; color: string; bg: string }> = {
@@ -194,35 +182,50 @@ export default function SearchScreen() {
     retry: false,
   });
 
-  const useTrpcFallback = searchEnabled && (!algoliaConfigured || algoliaQuery.isError);
+  const useRestFallback = searchEnabled && (!algoliaConfigured || algoliaQuery.isError);
 
   const {
-    data: trpcResults,
-    isLoading: trpcLoading,
-    isFetching: trpcFetching,
-    isError: trpcIsError,
-    error: trpcError,
-    refetch: refetchTrpcSearch,
-  } = trpc.customers.search.useQuery(
-    {
-      query: debouncedQuery,
-      state: selectedState || undefined,
-      limit: MAX_RESULTS,
+    data: restSearchResults,
+    isLoading: restLoading,
+    isFetching: restFetching,
+    isError: restIsError,
+    error: restError,
+    refetch: refetchRestSearch,
+  } = useQuery({
+    queryKey: ["rest-customers-search", debouncedQuery, selectedState, MAX_RESULTS],
+    queryFn: async (): Promise<Customer[]> => {
+      const url = apiUrl(`/customers?search=${encodeURIComponent(debouncedQuery)}`);
+      const res = await fetch(url, { credentials: "include" });
+      const text = await res.text();
+      let data: { results?: unknown[]; error?: string } = {};
+      try {
+        data = text ? (JSON.parse(text) as { results?: unknown[]; error?: string }) : {};
+      } catch {
+        throw new Error(`Search response was not JSON (HTTP ${res.status})`);
+      }
+      if (!res.ok) {
+        throw new Error(data?.error ?? `Search failed (${res.status})`);
+      }
+      let rows = Array.isArray(data.results) ? (data.results as Customer[]) : [];
+      const st = selectedState.trim();
+      if (st.length === 2) {
+        const upper = st.toUpperCase();
+        rows = rows.filter((c) => String(c.state ?? "").toUpperCase() === upper);
+      }
+      return rows.slice(0, MAX_RESULTS);
     },
-    {
-      enabled: searchEnabled && useTrpcFallback,
-      placeholderData: keepPreviousData,
-      retry: 2,
-      retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
-    },
-  );
+    enabled: searchEnabled && useRestFallback,
+    placeholderData: keepPreviousData,
+    retry: 2,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
+  });
 
   const displayResults = useMemo(() => {
     if (searchEnabled && algoliaConfigured && algoliaQuery.isSuccess && !algoliaQuery.isError) {
       return algoliaQuery.data ?? [];
     }
-    if (searchEnabled && useTrpcFallback) {
-      return (trpcResults ?? []) as Customer[];
+    if (searchEnabled && useRestFallback) {
+      return (restSearchResults ?? []) as Customer[];
     }
     return [];
   }, [
@@ -231,24 +234,24 @@ export default function SearchScreen() {
     algoliaQuery.isSuccess,
     algoliaQuery.isError,
     algoliaQuery.data,
-    useTrpcFallback,
-    trpcResults,
+    useRestFallback,
+    restSearchResults,
   ]);
 
   const isSearchLoading =
     !!searchEnabled &&
     ((algoliaConfigured && !algoliaQuery.isError && (algoliaQuery.isPending || algoliaQuery.isFetching)) ||
-      (useTrpcFallback && (trpcLoading || trpcFetching)));
+      (useRestFallback && (restLoading || restFetching)));
 
-  const isSearchError = useTrpcFallback && trpcIsError;
+  const isSearchError = useRestFallback && restIsError;
 
   const stateFilterApplied = selectedState.trim().length === 2;
 
-  const resolvedSearchSource = useMemo((): "algolia" | "trpc_fallback" | null => {
+  const resolvedSearchSource = useMemo((): "algolia" | "rest_api" | null => {
     if (!searchEnabled || isSearchLoading) return null;
     if (isSearchError) return null;
     if (algoliaConfigured && algoliaQuery.isSuccess && !algoliaQuery.isError) return "algolia";
-    if (useTrpcFallback && !trpcIsError) return "trpc_fallback";
+    if (useRestFallback && !restIsError) return "rest_api";
     return null;
   }, [
     searchEnabled,
@@ -257,12 +260,12 @@ export default function SearchScreen() {
     algoliaConfigured,
     algoliaQuery.isSuccess,
     algoliaQuery.isError,
-    useTrpcFallback,
-    trpcIsError,
+    useRestFallback,
+    restIsError,
   ]);
 
   const searchSessionRef = useRef({
-    source: null as "algolia" | "trpc_fallback" | null,
+    source: null as "algolia" | "rest_api" | null,
     queryLength: 0,
     stateFilter: false,
   });
@@ -296,7 +299,7 @@ export default function SearchScreen() {
       isLimited,
       len: displayResults.length,
       isSearchLoading,
-      isSearchError: isSearchError ? formatTrpcQueryError(trpcError) : false,
+      isSearchError: isSearchError ? formatRestSearchError(restError) : false,
       showResults,
       showNoResults,
       search_source: resolvedSearchSource,
@@ -314,7 +317,7 @@ export default function SearchScreen() {
     displayResults.length,
     isSearchLoading,
     isSearchError,
-    trpcError,
+    restError,
     showResults,
     showNoResults,
     resolvedSearchSource,
@@ -481,8 +484,8 @@ export default function SearchScreen() {
                         ? "error"
                         : resolvedSearchSource === "algolia"
                           ? "Algolia"
-                          : resolvedSearchSource === "trpc_fallback"
-                            ? "fallback"
+                          : resolvedSearchSource === "rest_api"
+                            ? "REST /api/customers"
                             : "—",
                     ` · state filter: ${stateFilterApplied ? "yes" : "no"}`,
                     ` · results: ${displayResults.length}`,
@@ -580,9 +583,9 @@ export default function SearchScreen() {
                           <Text key="t9" style={st.debugText}>{`displayResultsCount: ${displayResultsCount}`}</Text>,
                           <Text key="t10" style={st.debugText}>{`flatListShouldRender: ${String(flatListShouldRender)}`}</Text>,
                           <Text key="t11" style={st.debugText}>{`karenLikeInRaw: ${karenLikeInRaw}`}</Text>,
-                          <Text key="t12" style={st.debugText}>{`trpcBase: ${getApiBaseUrl()}/api/trpc`}</Text>,
+                          <Text key="t12" style={st.debugText}>{`restSearch: ${apiUrl(`/customers?search=${encodeURIComponent(debouncedQuery || "…")}`)}`}</Text>,
                           isSearchError ? (
-                            <Text key="t13" style={st.debugText}>{`trpcErr: ${formatTrpcQueryError(trpcError)}`}</Text>
+                            <Text key="t13" style={st.debugText}>{`restErr: ${formatRestSearchError(restError)}`}</Text>
                           ) : null,
                         ]}
                       </View>,
@@ -675,19 +678,19 @@ export default function SearchScreen() {
                         <Text key="et" style={[st.emptyTitle, { color: colors.foreground }]}>Search is temporarily unavailable</Text>,
                         <Text key="ed" style={[st.emptyDesc, { color: "rgba(255,255,255,0.45)" }]}>
                           {__DEV__
-                            ? formatTrpcQueryError(trpcError)
+                            ? formatRestSearchError(restError)
                             : "Please try again in a moment. If this keeps happening, contact support."}
                         </Text>,
                         <Pressable
                           key="retry"
-                          onPress={() => void refetchTrpcSearch()}
+                          onPress={() => void refetchRestSearch()}
                           style={[st.ctaBtn, { backgroundColor: colors.primary, marginTop: 12 }]}
                         >
                           <Text style={st.ctaBtnText}>Retry search</Text>
                         </Pressable>,
                         __DEV__ ? (
                           <Text key="eu" style={[st.emptyDesc, { color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 8 }]}>
-                            {`customers.search → ${getApiBaseUrl()}/api/trpc`}
+                            {`GET ${apiUrl(`/customers?search=${encodeURIComponent(debouncedQuery || "")}`)}`}
                           </Text>
                         ) : null,
                       ]}
