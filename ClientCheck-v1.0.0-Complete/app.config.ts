@@ -24,18 +24,30 @@ const bundleId =
 const timestamp = bundleId.split(".").pop()?.replace(/^t/, "") ?? "";
 const schemeFromBundleId = `clientcheck`;
 
-/** True when CLI is doing a static web export — skip @stripe/stripe-react-native config plugin (iOS/Android only; crashes if props are missing on web). */
-function isExpoExportWebOnly(): boolean {
+/**
+ * Web static export must never load @stripe/stripe-react-native's config plugin (native-only; crashes when plugin props are missing).
+ * Uses platform/env signals that work on Vercel (VERCEL=1), EAS (EAS_BUILD_PLATFORM), and explicit EXPO_WEB_EXPORT from npm scripts.
+ */
+function shouldIncludeStripeNativeExpoPlugin(): boolean {
+  const eas = process.env.EAS_BUILD_PLATFORM;
+  if (eas === "ios" || eas === "android") return true;
+  if (eas === "web") return false;
+
+  const webExportFlag = (process.env.EXPO_WEB_EXPORT || "").toLowerCase();
+  if (webExportFlag === "1" || webExportFlag === "true" || webExportFlag === "yes") return false;
+  if (process.env.EXPO_EXPORT_PLATFORM === "web") return false;
+  if (process.env.VERCEL === "1") return false;
+
   const argv = process.argv;
-  if (!argv.includes("export")) return false;
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--platform" || arg === "-p") {
-      if (argv[i + 1] === "web") return true;
+  if (argv.includes("export")) {
+    for (let i = 0; i < argv.length; i++) {
+      const arg = argv[i];
+      if ((arg === "--platform" || arg === "-p") && argv[i + 1] === "web") return false;
+      if (arg.startsWith("--platform=") && arg.slice("--platform=".length) === "web") return false;
     }
-    if (arg.startsWith("--platform=") && arg.slice("--platform=".length) === "web") return true;
   }
-  return false;
+
+  return true;
 }
 
 const env = {
@@ -134,16 +146,16 @@ const config: ExpoConfig = {
       },
     ],
     "expo-notifications",
-    ...(isExpoExportWebOnly()
-      ? []
-      : ([
+    ...(shouldIncludeStripeNativeExpoPlugin()
+      ? ([
           [
             "@stripe/stripe-react-native",
             {
               merchantIdentifier: "merchant.com.torygosnell.clientcheck",
             },
           ],
-        ] as NonNullable<ExpoConfig["plugins"]>)),
+        ] as NonNullable<ExpoConfig["plugins"]>)
+      : []),
   ],
   experiments: {
     typedRoutes: true,
