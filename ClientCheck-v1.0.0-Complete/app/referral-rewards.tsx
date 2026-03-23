@@ -4,6 +4,7 @@ import { ScreenContainer } from "@/components/screen-container";
 import { useColors } from "@/hooks/use-colors";
 import { useAuth } from "@/hooks/use-auth";
 import { useState, useEffect } from "react";
+import { apiUrl } from "@/lib/api";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 
@@ -26,7 +27,7 @@ export default function ReferralRewardsScreen() {
 
   const fetchReferralData = async () => {
     try {
-      const response = await fetch(`/api/referrals/status?userId=${user?.id}`);
+      const response = await fetch(apiUrl(`/api/referrals/status?userId=${user?.id}`), { credentials: "include" });
       if (response.ok) {
         const data = await response.json();
         setReferralStats(data);

@@ -2,9 +2,11 @@ import { createTRPCReact } from "@trpc/react-query";
 import { httpBatchLink } from "@trpc/client";
 import superjson from "superjson";
 import type { AppRouter } from "@/server/routers";
-import { getApiBaseUrl } from "@/constants/oauth";
+import { API_BASE } from "@/constants/oauth";
 import * as Auth from "@/lib/_core/auth";
 import { DEMO_MODE, getDemoResponse } from "@/lib/demo-data";
+
+const RAILWAY_TRPC_URL = `${API_BASE.replace(/\/$/, "")}/api/trpc`;
 
 export const trpc = createTRPCReact<AppRouter>();
 
@@ -94,9 +96,7 @@ export function createTRPCClient() {
   return trpc.createClient({
     links: [
       httpBatchLink({
-        url: DEMO_MODE
-          ? "http://localhost/api/trpc"
-          : `${getApiBaseUrl()}/api/trpc`,
+        url: DEMO_MODE ? "http://localhost/api/trpc" : RAILWAY_TRPC_URL,
         transformer: superjson,
         async headers() {
           if (DEMO_MODE) return {};

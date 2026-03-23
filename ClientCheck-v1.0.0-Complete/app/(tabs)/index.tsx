@@ -156,7 +156,7 @@ export default function HomeScreen() {
             /failed to fetch|networkerror|load failed|network request failed/i.test(msg)
               ? " (often CORS, offline, or blocked request — check DevTools Network)"
               : "";
-          setHomeSearchError(`Fetch error: ${msg}${corsHint} | API_BASE: ${API_BASE_URL || "(empty)"} | URL: ${url}`);
+          setHomeSearchError(`Fetch error: ${msg}${corsHint} | API_BASE: ${API_BASE_URL} | URL: ${url}`);
         } else {
           setHomeSearchError("Search failed. Check your connection and try again.");
         }

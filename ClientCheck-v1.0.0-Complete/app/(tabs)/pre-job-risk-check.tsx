@@ -11,6 +11,7 @@ import { ScreenContainer } from "@/components/screen-container";
 import { ScreenBackground } from "@/components/screen-background";
 import { useColors } from "@/hooks/use-colors";
 import { cn } from "@/lib/utils";
+import { apiUrl } from "@/lib/api";
 
 interface RiskCheckResult {
   customerId: number;
@@ -51,7 +52,8 @@ export default function PreJobRiskCheckScreen() {
     try {
       // Search for customer by name or phone
       const searchResponse = await fetch(
-        `/api/customers/search?query=${encodeURIComponent(searchQuery)}`
+        apiUrl(`/api/customers/search?query=${encodeURIComponent(searchQuery)}`),
+        { credentials: "include" },
       );
 
       if (!searchResponse.ok) {
@@ -68,7 +70,7 @@ export default function PreJobRiskCheckScreen() {
 
       // Get risk score for first result
       const customer = customers[0];
-      const riskResponse = await fetch(`/api/risk-scores/${customer.id}`);
+      const riskResponse = await fetch(apiUrl(`/api/risk-scores/${customer.id}`), { credentials: "include" });
 
       if (!riskResponse.ok) {
         throw new Error("Failed to fetch risk score");

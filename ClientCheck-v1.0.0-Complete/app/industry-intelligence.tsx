@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ScreenContainer } from '@/components/screen-container';
 import { useColors } from '@/hooks/use-colors';
+import { apiUrl } from '@/lib/api';
 
 export default function IndustryIntelligenceScreen() {
   const colors = useColors();
@@ -11,7 +12,7 @@ export default function IndustryIntelligenceScreen() {
 
   const load = async () => {
     const q = new URLSearchParams({ city, trade }).toString();
-    const res = await fetch(`/api/industry/intelligence?${q}`);
+    const res = await fetch(apiUrl(`/api/industry/intelligence?${q}`), { credentials: 'include' });
     setData(await res.json());
   };
   useEffect(() => { load().catch(console.error); }, []);

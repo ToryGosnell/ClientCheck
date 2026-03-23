@@ -1,31 +1,23 @@
-import Constants from "expo-constants";
-import { Platform } from "react-native";
-import { getApiBaseUrl, PRODUCTION_API_BASE_URL } from "@/constants/oauth";
+import { API_BASE } from "@/constants/oauth";
 
-function resolveApiBaseUrl() {
-  const explicit =
-    process.env.EXPO_PUBLIC_API_BASE_URL || process.env.EXPO_PUBLIC_API_URL;
-  if (explicit) return explicit.replace(/\/$/, "");
+const normalizedBase = API_BASE.replace(/\/$/, "");
 
-  const hostUri = (Constants.expoConfig?.hostUri || Constants.expoGoConfig?.debuggerHost || "").split(":")[0];
-  if (hostUri) {
-    const port = process.env.EXPO_PUBLIC_API_PORT || "3000";
-    return `http://${hostUri}:${port}`;
-  }
+export const API_BASE_URL = normalizedBase;
 
-  if (Platform.OS === "web") {
-    return getApiBaseUrl();
-  }
-
-  return PRODUCTION_API_BASE_URL;
+/**
+ * Ensure REST paths hit the Express /api/* mount (idempotent if already /api/...).
+ * Skips absolute http(s) URLs.
+ */
+export function ensureApiPrefix(path: string): string {
+  if (/^https?:\/\//i.test(path)) return path;
+  const n = path.startsWith("/") ? path : `/${path}`;
+  if (n === "/api" || n.startsWith("/api/")) return n;
+  return `/api${n}`;
 }
-
-export const API_BASE_URL = resolveApiBaseUrl();
 
 export function apiUrl(path: string) {
   if (/^https?:\/\//.test(path)) return path;
-  const normalized = path.startsWith("/") ? path : `/${path}`;
-  return `${API_BASE_URL}${normalized}`;
+  return `${normalizedBase}${ensureApiPrefix(path)}`;
 }
 
 export async function apiFetch<T = any>(path: string, init: RequestInit = {}): Promise<T> {
@@ -34,7 +26,7 @@ export async function apiFetch<T = any>(path: string, init: RequestInit = {}): P
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(apiUrl(path), { ...init, headers });
+  const response = await fetch(apiUrl(path), { ...init, headers, credentials: "include" });
   const contentType = response.headers.get("content-type") || "";
   const isJson = contentType.includes("application/json");
   const payload = isJson ? await response.json() : await response.text();

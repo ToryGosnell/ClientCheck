@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 import { getApiBaseUrl } from "@/constants/oauth";
+import { ensureApiPrefix } from "@/lib/api";
 import * as Auth from "./auth";
 
 type ApiResponse<T> = {
@@ -21,10 +22,9 @@ export async function apiCall<T>(endpoint: string, options: RequestInit = {}): P
     }
   }
 
-  const baseUrl = getApiBaseUrl();
-  const cleanBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-  const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
-  const url = baseUrl ? `${cleanBaseUrl}${cleanEndpoint}` : endpoint;
+  const baseUrl = getApiBaseUrl().replace(/\/$/, "");
+  const path = ensureApiPrefix(endpoint);
+  const url = `${baseUrl}${path}`;
 
   const response = await fetch(url, {
     ...options,
