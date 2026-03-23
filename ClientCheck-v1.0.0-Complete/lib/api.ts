@@ -1,5 +1,6 @@
 import Constants from "expo-constants";
 import { Platform } from "react-native";
+import { getApiBaseUrl, PRODUCTION_API_BASE_URL } from "@/constants/oauth";
 
 function resolveApiBaseUrl() {
   const explicit =
@@ -13,10 +14,10 @@ function resolveApiBaseUrl() {
   }
 
   if (Platform.OS === "web") {
-    return "";
+    return getApiBaseUrl();
   }
 
-  return "https://clientcheck-production.up.railway.app";
+  return PRODUCTION_API_BASE_URL;
 }
 
 export const API_BASE_URL = resolveApiBaseUrl();

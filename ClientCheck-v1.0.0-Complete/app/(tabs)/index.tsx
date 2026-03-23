@@ -340,9 +340,21 @@ export default function HomeScreen() {
               </Pressable>
             </View>
             <Text style={st.ctaSub}>Sign in for full customer profiles, tracking, and Alerts.</Text>
-            <Pressable onPress={() => router.push("/select-account" as never)} style={({ pressed }) => [st.signInLink, pressed && { opacity: 0.8 }]}>
-              <Text style={[st.signInLinkText, { color: colors.primary }]}>Contractor or customer sign in →</Text>
-            </Pressable>
+            <View style={st.signInActions}>
+              <Pressable
+                onPress={() => router.push({ pathname: "/select-account", params: { preset: "contractor" } } as never)}
+                style={({ pressed }) => [st.signInPrimaryBtn, { backgroundColor: colors.primary, borderColor: colors.primary }, pressed && { opacity: 0.88 }]}
+              >
+                <Text style={st.signInPrimaryBtnText}>Contractor sign in</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => router.push({ pathname: "/select-account", params: { preset: "customer" } } as never)}
+                style={({ pressed }) => [st.signInSecondaryBtn, { borderColor: "rgba(255,255,255,0.35)" }, pressed && { opacity: 0.88 }]}
+              >
+                <Text style={[st.signInSecondaryBtnText, { color: colors.foreground }]}>Customer sign in</Text>
+              </Pressable>
+              <Text style={[st.signInHint, { color: colors.muted }]}>Same secure sign-in for new and returning users</Text>
+            </View>
 
             {/* Trust strip */}
             <View style={st.trustStrip}>
@@ -365,8 +377,15 @@ export default function HomeScreen() {
 
               {PREVIEW_CUSTOMERS.map((c, i) => {
                 const risk = computeRiskScore(c);
+                const demoQuery = `${c.firstName} ${c.lastName}`.trim();
                 return (
-                  <Pressable key={i} onPress={handleLandingSearch} style={({ pressed }) => [st.previewCard, { borderColor: risk.color + "44" }, pressed && { opacity: 0.8 }]}>
+                  <Pressable
+                    key={i}
+                    onPress={() =>
+                      router.push({ pathname: "/(tabs)/search", params: { q: demoQuery } } as never)
+                    }
+                    style={({ pressed }) => [st.previewCard, { borderColor: risk.color + "44" }, pressed && { opacity: 0.8 }]}
+                  >
                     <View style={st.previewCardTop}>
                       <View style={[st.previewAvatar, { backgroundColor: risk.color }]}>
                         <Text style={st.previewInitials}>{c.firstName[0]}{c.lastName[0]}</Text>
@@ -710,8 +729,25 @@ const st = StyleSheet.create({
   autoScore: { fontSize: 16, fontWeight: "800" },
   autoScoreLabel: { fontSize: 9, fontWeight: "600", textTransform: "uppercase" as const, opacity: 0.85 },
   ctaSub: { color: "rgba(255,255,255,0.4)", fontSize: 12, marginTop: 8, textAlign: "center" },
-  signInLink: { marginTop: 4, paddingVertical: 8, alignSelf: "center" },
-  signInLinkText: { fontSize: 15, fontWeight: "600", textAlign: "center" },
+  signInActions: { width: "100%", maxWidth: 400, marginTop: 16, gap: 12, alignSelf: "center" },
+  signInPrimaryBtn: {
+    borderRadius: 14,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    alignItems: "center",
+    borderWidth: 1,
+  },
+  signInPrimaryBtnText: { color: "#fff", fontSize: 17, fontWeight: "800" },
+  signInSecondaryBtn: {
+    borderRadius: 14,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+  },
+  signInSecondaryBtnText: { fontSize: 16, fontWeight: "700" },
+  signInHint: { fontSize: 12, textAlign: "center", lineHeight: 17, marginTop: 2 },
   trustStrip: { flexDirection: "row", gap: 16, marginTop: 28, flexWrap: "wrap", justifyContent: "center" },
   trustItem: { alignItems: "center", gap: 4 },
   trustIcon: { fontSize: 22 },

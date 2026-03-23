@@ -53,10 +53,10 @@ export default function LandingScreen() {
               <Text className="text-sm font-bold text-slate-300">Contractors</Text>
               <Pressable
                 onPress={() => { handlePress(); openAccount(router, "contractor"); }}
-                className="bg-blue-600/90 rounded-xl py-3.5 items-center border border-blue-400/30"
+                className="bg-blue-600/90 rounded-xl py-5 items-center border border-blue-400/30"
                 style={({ pressed }) => ({ opacity: pressed ? 0.88 : 1 })}
               >
-                <Text className="text-white font-bold text-base">Contractor sign in</Text>
+                <Text className="text-white font-bold text-lg">Contractor sign in</Text>
               </Pressable>
               <Text className="text-center text-xs text-slate-500 -mt-1">
                 New or returning — same secure sign-in
@@ -66,10 +66,10 @@ export default function LandingScreen() {
               <Text className="text-sm font-bold text-slate-300">Customers</Text>
               <Pressable
                 onPress={() => { handlePress(); openAccount(router, "customer"); }}
-                className="bg-emerald-700/80 rounded-xl py-3.5 items-center border border-emerald-500/30"
+                className="bg-emerald-700/80 rounded-xl py-5 items-center border border-emerald-500/30"
                 style={({ pressed }) => ({ opacity: pressed ? 0.88 : 1 })}
               >
-                <Text className="text-white font-bold text-base">Customer sign in</Text>
+                <Text className="text-white font-bold text-lg">Customer sign in</Text>
               </Pressable>
               <Text className="text-center text-xs text-slate-500 -mt-1">
                 New or returning — same secure sign-in

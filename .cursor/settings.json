@@ -83,6 +83,9 @@
     },
     "wix": {
       "enabled": true
+    },
+    "convex": {
+      "enabled": true
     }
   }
 }

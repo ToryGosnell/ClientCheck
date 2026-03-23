@@ -20,6 +20,7 @@ import { CategoryRating } from "@/components/category-rating";
 import { FlagChipsSection } from "@/components/red-flag-chip";
 import { LegalDisclaimerModal } from "@/components/legal-disclaimer-modal";
 import { useColors } from "@/hooks/use-colors";
+import { TRPCClientError } from "@trpc/client";
 import { trpc } from "@/lib/trpc";
 import { serializeFlags } from "@/shared/review-flags";
 import { maskPhone, maskEmail } from "@/shared/customer-privacy";
@@ -239,12 +240,12 @@ export default function AddReviewScreen() {
         return;
       }
       if (!newPhone.trim()) {
-        return new Promise((resolve) => {
+        const shouldContinue = await new Promise<boolean>((resolve) => {
           Alert.alert(
             "Phone Number Recommended",
             "Phone numbers help prevent duplicate customer records. Are you sure you want to continue?",
             [
-              { text: "Cancel", onPress: () => resolve(null), style: "cancel" },
+              { text: "Cancel", onPress: () => resolve(false), style: "cancel" },
               {
                 text: "Continue Without Phone",
                 onPress: () => resolve(true),
@@ -252,12 +253,10 @@ export default function AddReviewScreen() {
               },
             ],
           );
-        }).then((shouldContinue) => {
-          if (!shouldContinue) return;
-          proceedWithCustomerCreation();
         });
+        if (!shouldContinue) return;
       }
-      proceedWithCustomerCreation();
+      await proceedWithCustomerCreation();
     } catch {
       Alert.alert("Error", "Failed to create customer. Please try again.");
     }
@@ -307,7 +306,20 @@ export default function AddReviewScreen() {
         resetNewCustomerForm();
       }
     } catch (e: unknown) {
-      Alert.alert("Error", (e as Error).message || "Failed to create customer.");
+      let message = "Failed to create customer.";
+      if (e instanceof TRPCClientError) {
+        const code = e.data?.code;
+        if (code === "UNAUTHORIZED") {
+          message = "Sign in as a contractor to create a customer, then try again.";
+        } else if (code === "FORBIDDEN") {
+          message = "Your account cannot create customers. Check that you are signed in as a contractor.";
+        } else if (e.message) {
+          message = e.message;
+        }
+      } else if (e instanceof Error && e.message) {
+        message = e.message;
+      }
+      Alert.alert("Could not create customer", message);
     }
   };
 

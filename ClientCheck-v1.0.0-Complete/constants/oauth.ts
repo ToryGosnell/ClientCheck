@@ -3,6 +3,9 @@ import * as ReactNative from "react-native";
 
 const schemeFromBundleId = "clientcheck";
 
+/** Hardcoded production API — deployed web must hit Railway (not static host origin). Local dev still uses localhost below. */
+export const PRODUCTION_API_BASE_URL = "https://clientcheck-production.up.railway.app";
+
 const env = {
   portal: process.env.EXPO_PUBLIC_OAUTH_PORTAL_URL ?? "",
   server: process.env.EXPO_PUBLIC_OAUTH_SERVER_URL ?? "",
@@ -21,14 +24,25 @@ export const OWNER_NAME = env.ownerName;
 export const API_BASE_URL = env.apiBaseUrl;
 
 /**
- * Resolve the web origin (protocol + host) for building absolute URLs.
- * Falls back to the production API URL when running outside a browser.
+ * Base URL for resolving relative links on web. Non-local browsers use the API host, not the static app origin.
  */
 function getWebOrigin(): string {
-  if (typeof window !== "undefined" && window.location?.origin) {
-    return window.location.origin;
+  if (typeof window !== "undefined" && window.location?.hostname) {
+    if (isLocalWebDevHostname(window.location.hostname)) {
+      return window.location.origin;
+    }
   }
-  return process.env.EXPO_PUBLIC_API_BASE_URL || "https://clientcheck-production.up.railway.app";
+  return PRODUCTION_API_BASE_URL;
+}
+
+/** True when the web app is clearly running on local dev (API may be same origin or proxied). */
+function isLocalWebDevHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
+    hostname.endsWith(".local")
+  );
 }
 
 /**
@@ -42,15 +56,16 @@ export function getApiBaseUrl(): string {
 
   if (ReactNative.Platform.OS === "web" && typeof window !== "undefined" && window.location) {
     const { protocol, hostname } = window.location;
-    const apiHostname = hostname.replace(/^8081-/, "3000-");
-    if (apiHostname !== hostname) {
-      return `${protocol}//${apiHostname}`;
+    if (isLocalWebDevHostname(hostname)) {
+      const apiHostname = hostname.replace(/^8081-/, "3000-");
+      if (apiHostname !== hostname) {
+        return `${protocol}//${apiHostname}`;
+      }
+      return window.location.origin;
     }
-    // Same host — API is co-located or proxied; use current origin
-    return window.location.origin;
   }
 
-  return process.env.EXPO_PUBLIC_API_BASE_URL || "https://clientcheck-production.up.railway.app";
+  return PRODUCTION_API_BASE_URL;
 }
 
 export const SESSION_TOKEN_KEY = "app_session_token";
