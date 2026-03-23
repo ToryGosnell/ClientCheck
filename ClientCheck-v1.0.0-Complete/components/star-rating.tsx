@@ -1,6 +1,7 @@
 import { Pressable, StyleSheet, View } from "react-native";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { useColors } from "@/hooks/use-colors";
+import { getStarColorByPosition } from "@/shared/review-categories";
 
 interface StarRatingProps {
   rating: number;
@@ -8,6 +9,8 @@ interface StarRatingProps {
   size?: number;
   interactive?: boolean;
   onRatingChange?: (rating: number) => void;
+  /** Use positional colors (red/yellow/green) instead of a single accent */
+  positionalColors?: boolean;
 }
 
 export function StarRating({
@@ -16,6 +19,7 @@ export function StarRating({
   size = 24,
   interactive = false,
   onRatingChange,
+  positionalColors = false,
 }: StarRatingProps) {
   const colors = useColors();
 
@@ -28,7 +32,11 @@ export function StarRating({
 
   const getStarColor = (index: number) => {
     const starNumber = index + 1;
-    return rating >= starNumber - 0.5 ? colors.accent : colors.border;
+    const filled = rating >= starNumber - 0.5;
+    if (positionalColors) {
+      return getStarColorByPosition(starNumber, filled, colors.border);
+    }
+    return filled ? colors.accent : colors.border;
   };
 
   return (
@@ -44,21 +52,13 @@ export function StarRating({
                 pressed && { opacity: 0.7, transform: [{ scale: 0.9 }] },
               ]}
             >
-              <IconSymbol
-                name={getStarIcon(i)}
-                size={size}
-                color={getStarColor(i)}
-              />
+              <IconSymbol name={getStarIcon(i)} size={size} color={getStarColor(i)} />
             </Pressable>
           );
         }
         return (
           <View key={i} style={styles.star}>
-            <IconSymbol
-              name={getStarIcon(i)}
-              size={size}
-              color={getStarColor(i)}
-            />
+            <IconSymbol name={getStarIcon(i)} size={size} color={getStarColor(i)} />
           </View>
         );
       })}

@@ -6,13 +6,15 @@ import {
   StyleSheet,
   Alert,
   TextInput,
- Modal } from "react-native";
+  Modal,
+} from "react-native";
 import { useState, useEffect } from "react";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { useColors } from "@/hooks/use-colors";
 import { ScreenContainer } from "@/components/screen-container";
 import { useAuth } from "@/hooks/use-auth";
 import { trpc } from "@/lib/trpc";
+import { track } from "@/lib/analytics";
 // Document picker removed - not needed for core functionality
 
 export default function DisputeReviewScreen() {
@@ -25,13 +27,20 @@ export default function DisputeReviewScreen() {
   const [customerEmail, setCustomerEmail] = useState("");
   const [disputeReason, setDisputeReason] = useState<string>("");
   const [description, setDescription] = useState("");
-  const [evidence, setEvidence] = useState<{ type: string; url?: string }[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const { user } = useAuth();
   const [showPaywall, setShowPaywall] = useState(false);
-  const [userSubscription, setUserSubscription] = useState<any>(null);
   const [isLoadingSubscription, setIsLoadingSubscription] = useState(true);
+
+  const createDisputeMutation = trpc.disputes.createDispute.useMutation();
+
+  useEffect(() => {
+    const cid = parseInt(String(params.customerId ?? "0"), 10);
+    if (Number.isFinite(cid) && cid > 0) {
+      track("dispute_started", { customer_id: cid });
+    }
+  }, [params.customerId]);
 
   // Check if user has active subscription
   useEffect(() => {
@@ -49,37 +58,26 @@ export default function DisputeReviewScreen() {
     { id: "other", label: "Other" },
   ];
 
-  const handleAddEvidence = async () => {
-    try {
-      Alert.alert("Feature Removed", "Document upload is not available in this build.");
-    } catch (error) {
-      Alert.alert("Error", "Failed to add evidence");
-    }
-  };
-
-  const handleRemoveEvidence = (index: number) => {
-    setEvidence((prev) => prev.filter((_, i) => i !== index));
-  };
-
   const handleSignUpClick = () => {
-    router.push('/(tabs)/profile');
+    router.push({ pathname: "/select-account", params: { preset: "customer" } } as never);
   };
-  
+
   const handleSubscribeClick = () => {
-    router.push('/subscription');
+    router.push('/customer-paywall' as never);
   };
 
   const handleSubmit = async () => {
-    // Check authentication and subscription before allowing dispute
     if (!user) {
       setShowPaywall(true);
       return;
     }
-    
-    if (!user) {
-      setShowPaywall(true);
+
+    const rid = parseInt(String(reviewId), 10);
+    if (!Number.isFinite(rid) || rid <= 0) {
+      Alert.alert("Error", "This dispute link is invalid. Open the review again and choose Dispute.");
       return;
     }
+
     if (!customerName.trim()) {
       Alert.alert("Error", "Please enter your name");
       return;
@@ -95,27 +93,40 @@ export default function DisputeReviewScreen() {
       return;
     }
 
-    if (!description.trim()) {
-      Alert.alert("Error", "Please describe your dispute");
-      return;
-    }
-
-    if (evidence.length === 0) {
-      Alert.alert("Error", "Please provide at least one piece of evidence");
+    if (description.trim().length < 10) {
+      Alert.alert("Error", "Please describe your dispute in at least 10 characters");
       return;
     }
 
     setIsSubmitting(true);
     try {
-      // Submit dispute
-      // await submitDispute(reviewId, {...})
+      await createDisputeMutation.mutateAsync({
+        reviewId: rid,
+        reason: disputeReason as
+          | "false_information"
+          | "defamatory"
+          | "privacy_violation"
+          | "not_my_business"
+          | "other",
+        description: description.trim(),
+        customerName: customerName.trim(),
+        customerEmail: customerEmail.trim(),
+      });
+      const submittedCid = parseInt(String(params.customerId ?? "0"), 10);
+      if (Number.isFinite(submittedCid) && submittedCid > 0) {
+        track("dispute_submitted", { customer_id: submittedCid });
+      }
       Alert.alert(
-        "Dispute Submitted",
-        "Thank you for submitting your dispute. We'll review it within 5-7 business days and send you an email with our decision."
+        "Dispute submitted",
+        "Thank you. We'll review your dispute and email you a decision — typically within 2–4 weeks.",
       );
       router.back();
-    } catch (error) {
-      Alert.alert("Error", "Failed to submit dispute");
+    } catch (error: unknown) {
+      const msg =
+        error && typeof error === "object" && "message" in error
+          ? String((error as { message: string }).message)
+          : "Something went wrong. Please try again.";
+      Alert.alert("Couldn't submit dispute", msg);
     } finally {
       setIsSubmitting(false);
     }
@@ -143,12 +154,12 @@ export default function DisputeReviewScreen() {
         <View style={[styles.paywallContainer, { backgroundColor: colors.background }]}>
           <View style={styles.paywallContent}>
             <Text style={[styles.paywallTitle, { color: colors.foreground }]}>
-              {!user ? 'Sign In Required' : 'Subscription Required'}
+              {!user ? 'Sign In Required' : 'Membership Required'}
             </Text>
             <Text style={[styles.paywallDescription, { color: colors.muted }]}>
               {!user
-                ? 'To dispute a review, you need to create an account and subscribe to our service.'
-                : 'To dispute a review, you need an active subscription. Subscribe now to get started.'}
+                ? 'Create an account to submit disputes and manage your profile.'
+                : 'A $9.99/month membership is required to submit disputes.'}
             </Text>
             
             <TouchableOpacity
@@ -156,7 +167,7 @@ export default function DisputeReviewScreen() {
               onPress={!user ? handleSignUpClick : handleSubscribeClick}
             >
               <Text style={[styles.paywallButtonText, { color: colors.background }]}>
-                {!user ? 'Sign Up Now' : 'Subscribe Now'}
+                {!user ? 'Sign Up' : 'Start Membership'}
               </Text>
             </TouchableOpacity>
             
@@ -167,7 +178,7 @@ export default function DisputeReviewScreen() {
                 router.back();
               }}
             >
-              <Text style={[styles.closeButtonText, { color: colors.muted }]}>Cancel</Text>
+              <Text style={[styles.closeButtonText, { color: colors.muted }]}>Not Now</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -299,50 +310,13 @@ export default function DisputeReviewScreen() {
           />
         </View>
 
-        {/* Evidence */}
+        {/* Evidence (uploads not in this build) */}
         <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
-            Provide Evidence
-          </Text>
+          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Evidence</Text>
           <Text style={[styles.helperText, { color: colors.muted }]}>
-            Upload photos, documents, or other evidence supporting your dispute
+            File uploads are not available in this version. Your written explanation above is submitted as primary
+            evidence. If we need more detail, we will email you.
           </Text>
-
-          {evidence.length > 0 && (
-            <View style={styles.evidenceList}>
-              {evidence.map((item, idx) => (
-                <View
-                  key={idx}
-                  style={[
-                    styles.evidenceItem,
-                    { backgroundColor: colors.surface, borderColor: colors.border },
-                  ]}
-                >
-                  <Text style={{ color: colors.foreground }}>
-                    {item.type === "photo" ? "📷" : "📄"} Evidence {idx + 1}
-                  </Text>
-                  <TouchableOpacity onPress={() => handleRemoveEvidence(idx)}>
-                    <Text style={{ color: colors.error, fontWeight: "700" }}>✕</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </View>
-          )}
-
-          <TouchableOpacity
-            onPress={handleAddEvidence}
-            style={[
-              styles.addEvidenceButton,
-              {
-                backgroundColor: colors.primary + "20",
-                borderColor: colors.primary,
-              },
-            ]}
-          >
-            <Text style={[styles.addEvidenceText, { color: colors.primary }]}>
-              + Add Evidence ({evidence.length}/10)
-            </Text>
-          </TouchableOpacity>
         </View>
 
         {/* Info Box */}
@@ -359,8 +333,8 @@ export default function DisputeReviewScreen() {
             📋 Our Dispute Process
           </Text>
           <Text style={[styles.infoText, { color: colors.foreground }]}>
-            1. Submit your dispute with evidence{"\n"}
-            2. We review within 5-7 business days{"\n"}
+            1. Submit your dispute with a clear explanation{"\n"}
+            2. We review within 2–4 weeks{"\n"}
             3. You'll receive an email decision{"\n"}
             4. If approved, the review is removed{"\n"}
             5. You can appeal if rejected

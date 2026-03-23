@@ -14,21 +14,32 @@ const router = Router();
  * Requires raw body for Stripe signature verification. Idempotent (duplicate events return 200).
  */
 router.post("/", async (req: Request, res: Response) => {
+  const signature = req.headers["stripe-signature"] as string;
+  if (!signature) {
+    return res.status(400).json({ error: "Missing stripe-signature header" });
+  }
+
+  const rawBody: Buffer | string | undefined = (req as any).rawBody;
+  if (!rawBody) {
+    console.error("[Stripe webhook] rawBody is missing. req.body type:", typeof req.body,
+      "isBuffer:", Buffer.isBuffer(req.body), "bodyLength:", req.body?.length ?? "n/a");
+    return res.status(400).json({ error: "Raw body unavailable for signature verification" });
+  }
+
+  let event;
   try {
-    const signature = req.headers["stripe-signature"] as string;
-    const body = (req as any).rawBody || (typeof req.body === "string" ? req.body : JSON.stringify(req.body || {}));
+    event = verifyStripeWebhook(rawBody, signature);
+  } catch (err) {
+    console.error("[Stripe webhook] Signature verification failed:", (err as Error).message);
+    return res.status(400).json({ error: "Webhook signature verification failed", detail: (err as Error).message });
+  }
 
-    if (!signature) {
-      return res.status(400).json({ error: "Missing stripe-signature header" });
-    }
-
-    const event = verifyStripeWebhook(body, signature);
+  try {
     const result = await handleStripeWebhookEvent(event);
-
     return res.json({ success: true, eventId: event.id, alreadyProcessed: result.alreadyProcessed ?? false });
-  } catch (error) {
-    console.error("[Stripe webhook] Error:", error);
-    return res.status(400).json({ error: (error as Error).message });
+  } catch (err) {
+    console.error("[Stripe webhook] Event processing failed:", err);
+    return res.status(500).json({ error: "Webhook event processing failed", eventId: event.id });
   }
 });
 

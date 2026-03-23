@@ -9,7 +9,8 @@ import { createContext } from "./context";
 import riskScoresRouter from "../routes/risk-scores";
 import disputeModerationRouter from "../routes/dispute-moderation";
 import platformRouter from "../routes/platform";
-import stripeWebhooksRouter from "../routes/stripe-webhooks";
+import { verifyStripeWebhook, handleStripeWebhookEvent } from "../stripe-webhook-handler";
+import { globalLimiter } from "../middleware/rate-limit";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -34,22 +35,23 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
-  // Enable CORS for all routes - reflect the request origin to support credentials
+  // CORS: echo request Origin so credentialed browser requests work (Expo web on localhost:* → Railway API).
   app.use((req, res, next) => {
     const origin = req.headers.origin;
     if (origin) {
-      res.header("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.append("Vary", "Origin");
     }
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    res.header(
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
+    res.setHeader(
       "Access-Control-Allow-Headers",
-      "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-user-id, x-user-role, x-api-key, x-clientcheck-mode, x-request-id",
+      "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-user-id, x-user-role, x-api-key, x-clientcheck-mode, x-request-id, trpc-accept",
     );
-    res.header("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Max-Age", "86400");
 
-    // Handle preflight requests
     if (req.method === "OPTIONS") {
-      res.sendStatus(200);
+      res.sendStatus(204);
       return;
     }
     next();
@@ -61,19 +63,65 @@ async function startServer() {
     res.json({ ok: true, timestamp: Date.now(), platform: "ClientCheck", status: "operational" });
   });
 
-  // Stripe webhook: must use raw body for signature verification (before express.json)
-  app.use(
+  // Stripe webhook — express.raw gives us the untouched Buffer as req.body.
+  // Registered BEFORE express.json() so the body stream is not consumed.
+  app.post(
     "/api/webhooks/stripe",
     express.raw({ type: "application/json" }),
-    (req, res, next) => {
-      (req as any).rawBody = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : req.body;
-      next();
+    async (req, res) => {
+      const signature = req.headers["stripe-signature"] as string;
+      if (!signature) {
+        return res.status(400).json({ error: "Missing stripe-signature header" });
+      }
+      if (!req.body || !Buffer.isBuffer(req.body) || req.body.length === 0) {
+        console.error("[Stripe webhook] Empty or non-Buffer body. type:", typeof req.body,
+          "isBuffer:", Buffer.isBuffer(req.body), "length:", req.body?.length ?? 0);
+        return res.status(400).json({ error: "Empty request body" });
+      }
+      let event;
+      try {
+        event = verifyStripeWebhook(req.body, signature);
+      } catch (err) {
+        console.error("[Stripe webhook] Signature verification failed:", (err as Error).message);
+        return res.status(400).json({ error: "Webhook signature verification failed", detail: (err as Error).message });
+      }
+      try {
+        const result = await handleStripeWebhookEvent(event);
+        return res.json({ success: true, eventId: event.id, alreadyProcessed: result.alreadyProcessed ?? false });
+      } catch (err) {
+        console.error("[Stripe webhook] Event processing failed:", err);
+        return res.status(500).json({ error: "Webhook event processing failed", eventId: event.id });
+      }
     },
-    stripeWebhooksRouter
   );
 
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+  // Global rate limiting — protects all routes from abuse
+  app.use((req, res, next) => {
+    const key = req.ip || "unknown";
+    if (!globalLimiter.isAllowed(key)) {
+      return res.status(429).json({ error: "Too many requests. Please try again later." });
+    }
+    next();
+  });
+
+  // Public customer search (homepage) — GET /api/customers?search=
+  app.get("/api/customers", async (req, res) => {
+    try {
+      const search = String(req.query.search ?? "").trim();
+      if (search.length < 2) {
+        return res.json({ results: [] });
+      }
+      const { searchCustomersApi } = await import("../db");
+      const rows = await searchCustomersApi(search, 500);
+      return res.json({ results: rows });
+    } catch (err) {
+      console.error("[GET /api/customers]", err);
+      return res.status(500).json({ error: "Customer search failed", results: [] });
+    }
+  });
 
   app.use("/api/risk-scores", riskScoresRouter);
   app.use("/api/disputes/moderation", disputeModerationRouter);

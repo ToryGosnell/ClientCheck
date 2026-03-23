@@ -219,7 +219,7 @@ export default function AchievementsScreen() {
                     <View className="flex-1">
                       <Text className="font-bold text-foreground">{achievement.title}</Text>
                       <Text className="text-xs text-muted mt-1">{achievement.description}</Text>
-                      {achievement.maxProgress && (
+                      {!!achievement.maxProgress && (
                         <View className="mt-2 h-1 rounded-full" style={{ backgroundColor: colors.border }}>
                           <View
                             className="h-1 rounded-full"
@@ -230,7 +230,7 @@ export default function AchievementsScreen() {
                           />
                         </View>
                       )}
-                      {achievement.maxProgress && (
+                      {!!achievement.maxProgress && (
                         <Text className="text-xs text-muted mt-1">
                           {progress} / {achievement.maxProgress}
                         </Text>

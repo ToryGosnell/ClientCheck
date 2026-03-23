@@ -1,10 +1,11 @@
 import { ThemedView } from "@/components/themed-view";
+import { startOAuthLogin } from "@/constants/oauth";
 import * as Api from "@/lib/_core/api";
 import * as Auth from "@/lib/_core/auth";
 import * as Linking from "expo-linking";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { ActivityIndicator, Text } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Pressable, StyleSheet, Text } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function OAuthCallback() {
@@ -13,32 +14,26 @@ export default function OAuthCallback() {
     code?: string;
     state?: string;
     error?: string;
+    error_description?: string;
     sessionToken?: string;
     user?: string;
   }>();
   const [status, setStatus] = useState<"processing" | "success" | "error">("processing");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const handled = useRef(false);
 
   useEffect(() => {
+    if (handled.current) return;
+    handled.current = true;
+
     const handleCallback = async () => {
-      console.log("[OAuth] Callback handler triggered");
-      console.log("[OAuth] Params received:", {
-        code: params.code,
-        state: params.state,
-        error: params.error,
-        sessionToken: params.sessionToken ? "present" : "missing",
-        user: params.user ? "present" : "missing",
-      });
       try {
-        // Check for sessionToken in params first (web OAuth callback from server redirect)
+        // 1. Session token already present (web OAuth callback from server redirect)
         if (params.sessionToken) {
-          console.log("[OAuth] Session token found in params (web callback)");
           await Auth.setSessionToken(params.sessionToken);
 
-          // Decode and store user info if available
           if (params.user) {
             try {
-              // Use atob for base64 decoding (works in both web and React Native)
               const userJson =
                 typeof atob !== "undefined"
                   ? atob(params.user)
@@ -53,148 +48,78 @@ export default function OAuthCallback() {
                 lastSignedIn: new Date(userData.lastSignedIn || Date.now()),
               };
               await Auth.setUserInfo(userInfo);
-              console.log("[OAuth] User info stored:", userInfo);
-            } catch (err) {
-              console.error("[OAuth] Failed to parse user data:", err);
+            } catch {
+              // User data parsing failed — session token is still valid
             }
           }
 
           setStatus("success");
-          console.log("[OAuth] Web authentication successful, redirecting to home...");
-          setTimeout(() => {
-            router.replace("/(tabs)");
-          }, 1000);
+          setTimeout(() => router.replace("/(tabs)"), 800);
           return;
         }
 
-        // Get URL from params or Linking
-        let url: string | null = null;
-
-        // Try to get from local search params first (works with expo-router)
-        if (params.code || params.state || params.error) {
-          console.log("[OAuth] Found params in route params");
-          // Extract from params
-          const urlParams = new URLSearchParams();
-          if (params.code) urlParams.set("code", params.code);
-          if (params.state) urlParams.set("state", params.state);
-          if (params.error) urlParams.set("error", params.error);
-          url = `?${urlParams.toString()}`;
-          console.log("[OAuth] Constructed URL from params:", url);
-        } else {
-          console.log("[OAuth] No params found, checking Linking.getInitialURL()...");
-          // Fallback: try to get from Linking
-          const initialUrl = await Linking.getInitialURL();
-          console.log("[OAuth] Linking.getInitialURL():", initialUrl);
-          if (initialUrl) {
-            url = initialUrl;
-          }
-        }
-
-        // Check for error
-        const error =
-          params.error || (url ? new URL(url, "http://dummy").searchParams.get("error") : null);
-        if (error) {
-          console.error("[OAuth] Error parameter found:", error);
+        // 2. Provider returned an error (cancelled, denied, expired)
+        const providerError = params.error;
+        if (providerError) {
+          const desc = params.error_description?.replace(/\+/g, " ");
+          const friendly =
+            providerError === "access_denied"
+              ? "Sign-in was cancelled."
+              : desc || "Sign-in could not be completed.";
           setStatus("error");
-          setErrorMessage(error || "OAuth error occurred");
+          setErrorMessage(friendly);
           return;
         }
 
-        // Check for code and state
-        let code: string | null = null;
-        let state: string | null = null;
+        // 3. Extract code + state from route params or URL
+        let code: string | null = params.code ?? null;
+        let state: string | null = params.state ?? null;
         let sessionToken: string | null = null;
 
-        // Try to get from params first
-        if (params.code && params.state) {
-          console.log("[OAuth] Using code and state from route params");
-          code = params.code;
-          state = params.state;
-        } else if (url) {
-          console.log("[OAuth] Parsing code and state from URL:", url);
-          // Parse from URL
-          try {
-            const urlObj = new URL(url);
-            code = urlObj.searchParams.get("code");
-            state = urlObj.searchParams.get("state");
-            sessionToken = urlObj.searchParams.get("sessionToken");
-            console.log("[OAuth] Extracted from URL:", {
-              code: code?.substring(0, 20) + "...",
-              state: state?.substring(0, 20) + "...",
-              sessionToken: sessionToken ? "present" : "missing",
-            });
-          } catch (e) {
-            console.log("[OAuth] Failed to parse as full URL, trying regex:", e);
-            // Try parsing as relative URL with query params
-            const match = url.match(/[?&](code|state|sessionToken)=([^&]+)/g);
-            if (match) {
-              match.forEach((param) => {
-                const [key, value] = param.substring(1).split("=");
-                if (key === "code") code = decodeURIComponent(value);
-                if (key === "state") state = decodeURIComponent(value);
-                if (key === "sessionToken") sessionToken = decodeURIComponent(value);
-              });
-              console.log("[OAuth] Extracted from regex:", {
-                code: code?.substring(0, 20) + "...",
-                state: state?.substring(0, 20) + "...",
-                sessionToken: sessionToken ? "present" : "missing",
-              });
+        if (!code && !state) {
+          const initialUrl = await Linking.getInitialURL();
+          if (initialUrl) {
+            try {
+              const urlObj = new URL(initialUrl);
+              code = urlObj.searchParams.get("code");
+              state = urlObj.searchParams.get("state");
+              sessionToken = urlObj.searchParams.get("sessionToken");
+            } catch {
+              const match = initialUrl.match(/[?&](code|state|sessionToken)=([^&]+)/g);
+              if (match) {
+                match.forEach((param) => {
+                  const [key, value] = param.substring(1).split("=");
+                  if (key === "code") code = decodeURIComponent(value);
+                  if (key === "state") state = decodeURIComponent(value);
+                  if (key === "sessionToken") sessionToken = decodeURIComponent(value);
+                });
+              }
             }
           }
         }
 
-        console.log("[OAuth] Final extracted values:", {
-          hasCode: !!code,
-          hasState: !!state,
-          hasSessionToken: !!sessionToken,
-        });
-
-        // If we have sessionToken directly from URL, use it
+        // Session token found in URL
         if (sessionToken) {
-          console.log("[OAuth] Session token found in URL, storing...");
           await Auth.setSessionToken(sessionToken);
-          console.log("[OAuth] Session token stored successfully");
-          // User info is already in the OAuth callback response
-          // No need to fetch from API
           setStatus("success");
-          console.log("[OAuth] Redirecting to home...");
-          setTimeout(() => {
-            router.replace("/(tabs)");
-          }, 1000);
+          setTimeout(() => router.replace("/(tabs)"), 800);
           return;
         }
 
-        // Otherwise, exchange code for session token
+        // 4. Missing code or state — user navigated here directly or session expired
         if (!code || !state) {
-          console.error("[OAuth] Missing code or state parameter", {
-            hasCode: !!code,
-            hasState: !!state,
-          });
           setStatus("error");
-          setErrorMessage("Missing code or state parameter");
+          setErrorMessage("Sign-in could not be completed. Please try again.");
           return;
         }
 
-        // Exchange code for session token
-        console.log("[OAuth] Exchanging code for session token...", {
-          code: code.substring(0, 20) + "...",
-          state: state.substring(0, 20) + "...",
-        });
+        // 5. Exchange code for session token
         const result = await Api.exchangeOAuthCode(code, state);
-        console.log("[OAuth] Exchange result:", {
-          hasSessionToken: !!result.sessionToken,
-          hasUser: !!result.user,
-        });
 
         if (result.sessionToken) {
-          console.log("[OAuth] Session token received, storing...");
-          // Store session token
           await Auth.setSessionToken(result.sessionToken);
-          console.log("[OAuth] Session token stored successfully");
 
-          // Store user info if available
           if (result.user) {
-            console.log("[OAuth] User data received:", result.user);
             const userInfo: Auth.User = {
               id: result.user.id,
               openId: result.user.openId,
@@ -204,68 +129,125 @@ export default function OAuthCallback() {
               lastSignedIn: new Date(result.user.lastSignedIn || Date.now()),
             };
             await Auth.setUserInfo(userInfo);
-            console.log("[OAuth] User info stored:", userInfo);
-          } else {
-            console.log("[OAuth] No user data in result");
           }
 
           setStatus("success");
-          console.log("[OAuth] Authentication successful, redirecting to home...");
-
-          // Redirect to home after a short delay
-          setTimeout(() => {
-            console.log("[OAuth] Executing redirect...");
-            router.replace("/(tabs)");
-          }, 1000);
+          setTimeout(() => router.replace("/(tabs)"), 800);
         } else {
-          console.error("[OAuth] No session token in result:", result);
           setStatus("error");
-          setErrorMessage("No session token received");
+          setErrorMessage("Sign-in could not be completed. Please try again.");
         }
-      } catch (error) {
-        console.error("[OAuth] Callback error:", error);
+      } catch {
         setStatus("error");
-        setErrorMessage(
-          error instanceof Error ? error.message : "Failed to complete authentication",
-        );
+        setErrorMessage("Something went wrong. Please try again.");
       }
     };
 
     handleCallback();
-  }, [params.code, params.state, params.error, params.sessionToken, params.user, router]);
+  }, []);
+
+  const handleRetry = () => {
+    startOAuthLogin();
+  };
+
+  const handleGoBack = () => {
+    router.replace("/(tabs)");
+  };
 
   return (
-    <SafeAreaView className="flex-1" edges={["top", "bottom", "left", "right"]}>
-      <ThemedView className="flex-1 items-center justify-center gap-4 p-5">
+    <SafeAreaView style={styles.safe} edges={["top", "bottom", "left", "right"]}>
+      <ThemedView style={styles.center}>
         {status === "processing" && (
           <>
             <ActivityIndicator size="large" />
-            <Text className="mt-4 text-base leading-6 text-center text-foreground">
-              Completing authentication...
-            </Text>
+            <Text style={styles.statusText}>Completing sign-in...</Text>
           </>
         )}
         {status === "success" && (
           <>
-            <Text className="text-base leading-6 text-center text-foreground">
-              Authentication successful!
-            </Text>
-            <Text className="text-base leading-6 text-center text-foreground">
-              Redirecting...
-            </Text>
+            <Text style={styles.successIcon}>✓</Text>
+            <Text style={styles.statusText}>Signed in successfully!</Text>
+            <Text style={styles.subText}>Redirecting...</Text>
           </>
         )}
         {status === "error" && (
           <>
-            <Text className="mb-2 text-xl font-bold leading-7 text-error">
-              Authentication failed
-            </Text>
-            <Text className="text-base leading-6 text-center text-foreground">
-              {errorMessage}
-            </Text>
+            <Text style={styles.errorTitle}>Sign-in failed</Text>
+            <Text style={styles.errorDesc}>{errorMessage}</Text>
+            <Pressable
+              onPress={handleRetry}
+              style={({ pressed }) => [styles.retryBtn, pressed && { opacity: 0.8 }]}
+            >
+              <Text style={styles.retryBtnText}>Try again</Text>
+            </Pressable>
+            <Pressable onPress={handleGoBack} style={styles.backLink}>
+              <Text style={styles.backLinkText}>Go back</Text>
+            </Pressable>
           </>
         )}
       </ThemedView>
     </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+  },
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+    gap: 12,
+  },
+  statusText: {
+    marginTop: 16,
+    fontSize: 16,
+    lineHeight: 22,
+    textAlign: "center",
+    color: "#999",
+  },
+  subText: {
+    fontSize: 14,
+    color: "#666",
+  },
+  successIcon: {
+    fontSize: 48,
+    color: "#22c55e",
+  },
+  errorTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#ef4444",
+    marginBottom: 4,
+  },
+  errorDesc: {
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: "center",
+    color: "#999",
+    marginBottom: 12,
+  },
+  retryBtn: {
+    backgroundColor: "#3b82f6",
+    paddingHorizontal: 32,
+    paddingVertical: 14,
+    borderRadius: 10,
+    marginTop: 8,
+  },
+  retryBtnText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  backLink: {
+    marginTop: 12,
+    padding: 8,
+  },
+  backLinkText: {
+    color: "#666",
+    fontSize: 14,
+    textDecorationLine: "underline",
+  },
+});

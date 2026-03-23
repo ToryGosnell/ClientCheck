@@ -7,14 +7,29 @@
 import Stripe from "stripe";
 import { eq } from "drizzle-orm";
 import { getDb } from "./db";
-import { stripeWebhookEvents, stripePayments, subscriptions } from "../drizzle/schema";
+import { stripeWebhookEvents, stripePayments, subscriptions, users } from "../drizzle/schema";
+import type { BillingPlanType } from "../shared/billing-config";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", { apiVersion: "2023-10-16" });
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || "";
 
-export function verifyStripeWebhook(body: string, signature: string): Stripe.Event {
+export function verifyStripeWebhook(body: string | Buffer, signature: string): Stripe.Event {
   if (!WEBHOOK_SECRET) throw new Error("STRIPE_WEBHOOK_SECRET is not set");
   return stripe.webhooks.constructEvent(body, signature, WEBHOOK_SECRET);
+}
+
+/** Extract period dates from subscription (property names vary across Stripe SDK versions) */
+function getSubPeriod(sub: Record<string, any>): { start: Date; end: Date } {
+  const startTs = sub.current_period_start ?? Math.floor(Date.now() / 1000);
+  const endTs = sub.current_period_end ?? Math.floor(Date.now() / 1000) + 30 * 86400;
+  return { start: new Date(startTs * 1000), end: new Date(endTs * 1000) };
+}
+
+/** Extract subscription ID from an Invoice (property name varies across Stripe SDK versions) */
+function getInvoiceSubId(invoice: Record<string, any>): string | null {
+  const sub = invoice.subscription ?? invoice.subscription_details?.metadata?.subscription_id;
+  if (!sub) return null;
+  return typeof sub === "string" ? sub : sub.id ?? null;
 }
 
 /** Map Stripe subscription status to our subscriptions.status enum */
@@ -38,6 +53,7 @@ function mapStripeSubscriptionStatus(stripeStatus: string): "active" | "cancelle
  * Idempotent process: record event, then handle by type. Returns true if processed (or already seen).
  */
 export async function handleStripeWebhookEvent(event: Stripe.Event): Promise<{ success: boolean; alreadyProcessed?: boolean }> {
+  console.log("Webhook received:", event.type);
   const db = await getDb();
   if (!db) {
     console.error("[Stripe webhook] Database not available");
@@ -65,6 +81,9 @@ export async function handleStripeWebhookEvent(event: Stripe.Event): Promise<{ s
 
   try {
     switch (event.type) {
+      case "checkout.session.completed":
+        await handleCheckoutSessionCompleted(db, event.data.object as Stripe.Checkout.Session);
+        break;
       case "payment_intent.succeeded":
         await handlePaymentIntentSucceeded(db, event.data.object as Stripe.PaymentIntent);
         break;
@@ -114,6 +133,7 @@ export async function handleStripeWebhookEvent(event: Stripe.Event): Promise<{ s
 
 async function handlePaymentIntentSucceeded(db: Awaited<ReturnType<typeof getDb>>, pi: Stripe.PaymentIntent) {
   if (!db) return;
+  const userId = pi.metadata?.userId ? Number(pi.metadata.userId) : null;
   const existing = await db
     .select()
     .from(stripePayments)
@@ -122,17 +142,30 @@ async function handlePaymentIntentSucceeded(db: Awaited<ReturnType<typeof getDb>
   if (existing.length > 0) {
     await db
       .update(stripePayments)
-      .set({ status: "succeeded", updatedAt: new Date() })
+      .set({ status: "succeeded", ...(userId && { userId }), updatedAt: new Date() })
       .where(eq(stripePayments.stripePaymentIntentId, pi.id));
   } else {
     await db.insert(stripePayments).values({
       stripePaymentIntentId: pi.id,
+      userId,
       amountCents: pi.amount ?? null,
       currency: pi.currency ?? null,
       status: "succeeded",
       createdAt: new Date(),
       updatedAt: new Date(),
     });
+  }
+
+  // If payment method was attached, record it on the user's subscription
+  if (userId && pi.payment_method) {
+    const pmId = typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method.id;
+    const subRows = await db.select().from(subscriptions).where(eq(subscriptions.userId, userId)).limit(1);
+    if (subRows.length > 0) {
+      await db.update(subscriptions).set({
+        paymentMethodOnFile: true,
+        stripeDefaultPaymentMethodId: pmId,
+      }).where(eq(subscriptions.userId, userId));
+    }
   }
 }
 
@@ -173,28 +206,47 @@ async function handleChargeRefunded(db: Awaited<ReturnType<typeof getDb>>, charg
 
 async function handleSubscriptionCreated(db: Awaited<ReturnType<typeof getDb>>, sub: Stripe.Subscription) {
   if (!db) return;
-  // We may not have a row yet (app creates subscription after payment; webhook can arrive first).
-  // Update any subscription row that already has this stripeSubscriptionId (e.g. created by app).
-  const rows = await db
+  const status = mapStripeSubscriptionStatus(sub.status);
+  const { start: periodStart, end: periodEnd } = getSubPeriod(sub);
+
+  // Try to find existing row by stripeSubscriptionId
+  const bySubId = await db
     .select()
     .from(subscriptions)
     .where(eq(subscriptions.stripeSubscriptionId, sub.id))
     .limit(1);
-  const status = mapStripeSubscriptionStatus(sub.status);
-  const periodStart = new Date(sub.current_period_start * 1000);
-  const periodEnd = new Date(sub.current_period_end * 1000);
-  if (rows.length > 0) {
-    await db
-      .update(subscriptions)
-      .set({
-        status,
-        subscriptionStartedAt: periodStart,
-        subscriptionEndsAt: periodEnd,
-        updatedAt: new Date(),
-      })
-      .where(eq(subscriptions.stripeSubscriptionId, sub.id));
+
+  if (bySubId.length > 0) {
+    await db.update(subscriptions).set({
+      status, subscriptionStartedAt: periodStart, subscriptionEndsAt: periodEnd, updatedAt: new Date(),
+    }).where(eq(subscriptions.stripeSubscriptionId, sub.id));
+    return;
   }
-  // If no row exists, subscription was created in Stripe only; app will link on next sync or we could create by metadata.userId if you add it.
+
+  // No row by sub ID — try to link by userId from metadata
+  const userIdStr = sub.metadata?.userId;
+  if (!userIdStr) return;
+  const userId = Number(userIdStr);
+  if (!userId || isNaN(userId)) return;
+
+  const byUserId = await db
+    .select()
+    .from(subscriptions)
+    .where(eq(subscriptions.userId, userId))
+    .limit(1);
+
+  if (byUserId.length > 0) {
+    await db.update(subscriptions).set({
+      status, stripeSubscriptionId: sub.id,
+      subscriptionStartedAt: periodStart, subscriptionEndsAt: periodEnd, updatedAt: new Date(),
+    }).where(eq(subscriptions.userId, userId));
+  } else {
+    await db.insert(subscriptions).values({
+      userId, status, stripeSubscriptionId: sub.id,
+      subscriptionStartedAt: periodStart, subscriptionEndsAt: periodEnd,
+      trialStartedAt: periodStart, trialEndsAt: periodStart,
+    });
+  }
 }
 
 async function handleSubscriptionUpdated(db: Awaited<ReturnType<typeof getDb>>, sub: Stripe.Subscription) {
@@ -206,8 +258,7 @@ async function handleSubscriptionUpdated(db: Awaited<ReturnType<typeof getDb>>, 
     .limit(1);
   if (rows.length === 0) return;
   const status = mapStripeSubscriptionStatus(sub.status);
-  const periodStart = new Date(sub.current_period_start * 1000);
-  const periodEnd = new Date(sub.current_period_end * 1000);
+  const { start: periodStart, end: periodEnd } = getSubPeriod(sub);
   await db
     .update(subscriptions)
     .set({
@@ -228,8 +279,8 @@ async function handleSubscriptionDeleted(db: Awaited<ReturnType<typeof getDb>>, 
 }
 
 async function handleInvoicePaymentSucceeded(db: Awaited<ReturnType<typeof getDb>>, invoice: Stripe.Invoice) {
-  if (!db || !invoice.subscription) return;
-  const subId = typeof invoice.subscription === "string" ? invoice.subscription : invoice.subscription.id;
+  const subId = getInvoiceSubId(invoice);
+  if (!db || !subId) return;
   const rows = await db
     .select()
     .from(subscriptions)
@@ -244,10 +295,144 @@ async function handleInvoicePaymentSucceeded(db: Awaited<ReturnType<typeof getDb
 }
 
 async function handleInvoicePaymentFailed(db: Awaited<ReturnType<typeof getDb>>, invoice: Stripe.Invoice) {
-  if (!db || !invoice.subscription) return;
-  const subId = typeof invoice.subscription === "string" ? invoice.subscription : invoice.subscription.id;
+  const subId = getInvoiceSubId(invoice);
+  if (!db || !subId) return;
   await db
     .update(subscriptions)
     .set({ status: "cancelled", updatedAt: new Date() })
     .where(eq(subscriptions.stripeSubscriptionId, subId));
+}
+
+/**
+ * checkout.session.completed — the primary event for Stripe Checkout flows.
+ * Links the Stripe customer, subscription, and payment to the app user,
+ * then activates their subscription.
+ */
+async function handleCheckoutSessionCompleted(
+  db: Awaited<ReturnType<typeof getDb>>,
+  session: Stripe.Checkout.Session,
+) {
+  if (!db) return;
+
+  const userIdStr = session.metadata?.userId;
+  const userId = userIdStr ? Number(userIdStr) : null;
+  const customerEmail = session.customer_details?.email ?? session.customer_email ?? null;
+  const stripeCustomerId = typeof session.customer === "string"
+    ? session.customer
+    : session.customer?.id ?? null;
+  const stripeSubscriptionId = typeof session.subscription === "string"
+    ? session.subscription
+    : (session.subscription as any)?.id ?? null;
+  const paymentIntentId = typeof session.payment_intent === "string"
+    ? session.payment_intent
+    : (session.payment_intent as any)?.id ?? null;
+  const planType = (session.metadata?.planType ?? session.metadata?.plan ?? null) as BillingPlanType | null;
+
+  console.log("[Stripe webhook] checkout.session.completed", {
+    userId, customerEmail, stripeCustomerId, stripeSubscriptionId, paymentIntentId, planType,
+    mode: session.mode, status: session.payment_status,
+  });
+
+  if (!userId && !customerEmail) {
+    console.warn("[Stripe webhook] checkout.session.completed: no userId or email — cannot link to user");
+    return;
+  }
+
+  // Resolve user: prefer userId from metadata, fall back to email lookup
+  let resolvedUserId = userId;
+  if (!resolvedUserId && customerEmail) {
+    const userRows = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, customerEmail))
+      .limit(1);
+    if (userRows.length > 0) {
+      resolvedUserId = userRows[0].id;
+    }
+  }
+
+  if (!resolvedUserId) {
+    console.warn("[Stripe webhook] checkout.session.completed: could not resolve userId");
+    return;
+  }
+
+  // Record payment if there is a payment_intent
+  if (paymentIntentId) {
+    const existingPayment = await db
+      .select()
+      .from(stripePayments)
+      .where(eq(stripePayments.stripePaymentIntentId, paymentIntentId))
+      .limit(1);
+
+    if (existingPayment.length > 0) {
+      await db
+        .update(stripePayments)
+        .set({ status: "succeeded", userId: resolvedUserId, updatedAt: new Date() })
+        .where(eq(stripePayments.stripePaymentIntentId, paymentIntentId));
+    } else {
+      await db.insert(stripePayments).values({
+        stripePaymentIntentId: paymentIntentId,
+        userId: resolvedUserId,
+        amountCents: session.amount_total ?? null,
+        currency: session.currency ?? null,
+        status: "succeeded",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+  }
+
+  // Determine plan type from metadata or price lookup
+  let resolvedPlanType: BillingPlanType = planType ?? "none";
+  if (resolvedPlanType === "none" && stripeSubscriptionId) {
+    try {
+      const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+      const priceId = sub.items?.data?.[0]?.price?.id;
+      const { STRIPE_PRICE_ID_CONTRACTOR_ANNUAL, STRIPE_PRICE_ID_CUSTOMER_MONTHLY } =
+        await import("../shared/billing-config");
+      if (priceId === STRIPE_PRICE_ID_CONTRACTOR_ANNUAL) resolvedPlanType = "contractor_annual";
+      else if (priceId === STRIPE_PRICE_ID_CUSTOMER_MONTHLY) resolvedPlanType = "customer_monthly";
+    } catch (e) {
+      console.warn("[Stripe webhook] Could not look up subscription for plan detection:", e);
+    }
+  }
+
+  // Upsert subscription record
+  const now = new Date();
+  const oneYearFromNow = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
+  const oneMonthFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+  const periodEnd = resolvedPlanType === "contractor_annual" ? oneYearFromNow : oneMonthFromNow;
+
+  const existingSub = await db
+    .select()
+    .from(subscriptions)
+    .where(eq(subscriptions.userId, resolvedUserId))
+    .limit(1);
+
+  const subUpdate = {
+    status: "active" as const,
+    planType: resolvedPlanType !== "none" ? resolvedPlanType : undefined,
+    stripeCustomerId: stripeCustomerId ?? undefined,
+    stripeSubscriptionId: stripeSubscriptionId ?? undefined,
+    subscriptionStartedAt: now,
+    subscriptionEndsAt: periodEnd,
+    paymentMethodOnFile: true,
+    updatedAt: now,
+  };
+
+  if (existingSub.length > 0) {
+    await db
+      .update(subscriptions)
+      .set(subUpdate)
+      .where(eq(subscriptions.userId, resolvedUserId));
+  } else {
+    await db.insert(subscriptions).values({
+      userId: resolvedUserId,
+      ...subUpdate,
+      trialStartedAt: now,
+      trialEndsAt: now,
+    });
+  }
+
+  console.log(`[Stripe webhook] checkout.session.completed: activated ${resolvedPlanType} for user ${resolvedUserId}`);
 }

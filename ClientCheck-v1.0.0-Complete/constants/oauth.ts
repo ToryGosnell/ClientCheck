@@ -1,7 +1,6 @@
 import * as Linking from "expo-linking";
 import * as ReactNative from "react-native";
 
-// Deep link scheme must match app.config.ts (scheme: "clientcheck")
 const schemeFromBundleId = "clientcheck";
 
 const env = {
@@ -22,28 +21,36 @@ export const OWNER_NAME = env.ownerName;
 export const API_BASE_URL = env.apiBaseUrl;
 
 /**
+ * Resolve the web origin (protocol + host) for building absolute URLs.
+ * Falls back to the production API URL when running outside a browser.
+ */
+function getWebOrigin(): string {
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+  return process.env.EXPO_PUBLIC_API_BASE_URL || "https://clientcheck-production.up.railway.app";
+}
+
+/**
  * Get the API base URL, deriving from current hostname if not set.
- * Metro runs on 8081, API server runs on 3000.
- * URL pattern: https://PORT-sandboxid.region.domain
+ * Always returns an absolute URL — never an empty string.
  */
 export function getApiBaseUrl(): string {
-  // If API_BASE_URL is set, use it
   if (API_BASE_URL) {
     return API_BASE_URL.replace(/\/$/, "");
   }
 
-  // On web, derive from current hostname by replacing port 8081 with 3000
   if (ReactNative.Platform.OS === "web" && typeof window !== "undefined" && window.location) {
     const { protocol, hostname } = window.location;
-    // Pattern: 8081-sandboxid.region.domain -> 3000-sandboxid.region.domain
     const apiHostname = hostname.replace(/^8081-/, "3000-");
     if (apiHostname !== hostname) {
       return `${protocol}//${apiHostname}`;
     }
+    // Same host — API is co-located or proxied; use current origin
+    return window.location.origin;
   }
 
-  // Fallback to empty (will use relative URL)
-  return "";
+  return process.env.EXPO_PUBLIC_API_BASE_URL || "https://clientcheck-production.up.railway.app";
 }
 
 export const SESSION_TOKEN_KEY = "app_session_token";
@@ -61,25 +68,45 @@ const encodeState = (value: string) => {
 };
 
 /**
+ * Build an absolute URL safely. If `input` is already absolute, use it directly.
+ * Otherwise resolve it against `base` (or the current web origin).
+ */
+function safeUrl(input: string, base?: string): URL | null {
+  if (!input) return null;
+  try {
+    return new URL(input);
+  } catch {
+    try {
+      return new URL(input, base || getWebOrigin());
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
  * Get the redirect URI for OAuth callback.
- * - Web: uses API server callback endpoint
- * - Native: uses deep link scheme
  */
 export const getRedirectUri = () => {
   if (ReactNative.Platform.OS === "web") {
     return `${getApiBaseUrl()}/api/oauth/callback`;
-  } else {
-    return Linking.createURL("/oauth/callback", {
-      scheme: env.deepLinkScheme,
-    });
   }
+  return Linking.createURL("/oauth/callback", {
+    scheme: env.deepLinkScheme,
+  });
 };
 
 export const getLoginUrl = () => {
   const redirectUri = getRedirectUri();
   const state = encodeState(redirectUri);
 
-  const url = new URL(`${OAUTH_PORTAL_URL}/app-auth`);
+  const portalBase = OAUTH_PORTAL_URL || getApiBaseUrl();
+  const url = safeUrl(`${portalBase}/app-auth`);
+  if (!url) {
+    console.warn("[OAuth] Cannot build login URL — OAUTH_PORTAL_URL is not configured.");
+    return `${getWebOrigin()}/oauth/callback?error=misconfigured`;
+  }
+
   url.searchParams.set("appId", APP_ID);
   url.searchParams.set("redirectUri", redirectUri);
   url.searchParams.set("state", state);
@@ -90,39 +117,27 @@ export const getLoginUrl = () => {
 
 /**
  * Start OAuth login flow.
- *
- * On native platforms (iOS/Android), open the system browser directly so
- * the OAuth callback returns via deep link to the app.
- *
- * On web, this simply redirects to the login URL.
- *
- * @returns Always null, the callback is handled via deep link.
  */
 export async function startOAuthLogin(): Promise<string | null> {
   const loginUrl = getLoginUrl();
 
   if (ReactNative.Platform.OS === "web") {
-    // On web, just redirect
     if (typeof window !== "undefined") {
       window.location.href = loginUrl;
     }
     return null;
   }
 
-  const supported = await Linking.canOpenURL(loginUrl);
-  if (!supported) {
-    console.warn("[OAuth] Cannot open login URL: URL scheme not supported");
-    // 可考虑抛出错误或返回错误状态，让调用方处理
-    return null;
-  }
-
   try {
+    const supported = await Linking.canOpenURL(loginUrl);
+    if (!supported) {
+      console.warn("[OAuth] Cannot open login URL: URL scheme not supported");
+      return null;
+    }
     await Linking.openURL(loginUrl);
   } catch (error) {
-    console.error("[OAuth] Failed to open login URL:", error);
-    // 可考虑抛出错误让调用方处理
+    console.warn("[OAuth] Failed to open login URL:", error);
   }
 
-  // The OAuth callback will reopen the app via deep link.
   return null;
 }

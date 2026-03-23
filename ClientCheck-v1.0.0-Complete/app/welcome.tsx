@@ -6,6 +6,7 @@
 import { ScrollView, Text, View, TouchableOpacity, Image } from "react-native";
 import { useRouter } from "expo-router";
 import { ScreenContainer } from "@/components/screen-container";
+import { ScreenBackground } from "@/components/screen-background";
 
 export default function WelcomeScreen() {
   const router = useRouter();
@@ -13,8 +14,8 @@ export default function WelcomeScreen() {
   const features = [
     {
       icon: "🔍",
-      title: "Search Reviews",
-      description: "Look up customer reviews and ratings before accepting jobs",
+      title: "Search & vet",
+      description: "Contractor risk intelligence — look up documented experiences before you commit to a job",
     },
     {
       icon: "⭐",
@@ -34,7 +35,8 @@ export default function WelcomeScreen() {
   ];
 
   return (
-    <ScreenContainer className="bg-background">
+    <ScreenBackground backgroundKey="auth">
+    <ScreenContainer className="bg-transparent">
       <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
         <View className="flex-1 justify-between py-8 px-6">
           {/* Hero Section */}
@@ -46,16 +48,16 @@ export default function WelcomeScreen() {
 
             {/* Title */}
             <View className="gap-2">
-              <Text className="text-4xl font-bold text-foreground text-center">ClientCheck</Text>
-              <Text className="text-lg text-muted text-center">
-                The contractor's tool to vet customers before accepting jobs
+              <Text style={{ fontSize: 36, fontWeight: "800", textAlign: "center", color: "#fff" }}>ClientCheck</Text>
+              <Text style={{ fontSize: 18, textAlign: "center", color: "rgba(255,255,255,0.75)" }}>
+                Contractor risk intelligence from documented experiences — informed decision support before your next job
               </Text>
             </View>
 
             {/* Tagline */}
             <View className="bg-surface rounded-2xl p-4 border border-border">
               <Text className="text-base text-foreground text-center leading-relaxed">
-                Search customer reviews, check payment history, and protect yourself from problem clients.
+                Search documented contractor experiences, spot payment and behavior patterns, and make smarter calls on which jobs to take.
               </Text>
             </View>
           </View>
@@ -79,23 +81,20 @@ export default function WelcomeScreen() {
           <View className="gap-3 mb-8">
             <Text className="text-xl font-semibold text-foreground">Simple Pricing</Text>
 
-            <View className="flex-row gap-3">
-              <View className="flex-1 bg-surface rounded-xl p-4 border border-border">
-                <Text className="text-sm text-muted mb-1">Monthly</Text>
-                <Text className="text-2xl font-bold text-primary">$9.99</Text>
-                <Text className="text-xs text-muted mt-1">/month</Text>
+            <View className="bg-surface rounded-xl p-5 border border-border gap-3">
+              <View className="flex-row items-baseline gap-2">
+                <Text className="text-3xl font-bold text-primary">12 months free</Text>
               </View>
-
-              <View className="flex-1 bg-surface rounded-xl p-4 border border-border">
-                <Text className="text-sm text-muted mb-1">Yearly</Text>
-                <Text className="text-2xl font-bold text-primary">$100</Text>
-                <Text className="text-xs text-muted mt-1">/year</Text>
+              <Text className="text-sm text-foreground leading-relaxed">
+                Verified contractors get 12 months of full access at no cost.
+              </Text>
+              <View className="gap-2 mt-1">
+                <Text className="text-xs text-muted">✓ Valid contractor license number required</Text>
+                <Text className="text-xs text-muted">✓ After the free period, membership renews at $120.00/year</Text>
+                <Text className="text-xs text-muted">✓ You'll be reminded 3 days before your free period ends</Text>
+                <Text className="text-xs text-muted">✓ No credit card required to start</Text>
               </View>
             </View>
-
-            <Text className="text-xs text-muted text-center mt-2">
-              90-day free trial for contractors • No credit card required
-            </Text>
           </View>
 
           {/* CTA Buttons */}
@@ -118,17 +117,18 @@ export default function WelcomeScreen() {
           {/* Trust Indicators */}
           <View className="gap-2 mt-6 pt-6 border-t border-border">
             <View className="flex-row items-center justify-center gap-2">
-              <Text className="text-sm text-muted">✓ 100% Verified Reviews</Text>
+              <Text className="text-sm text-muted">✓ 12 months free for verified contractors</Text>
             </View>
             <View className="flex-row items-center justify-center gap-2">
-              <Text className="text-sm text-muted">✓ Both Sides Pay for Fairness</Text>
+              <Text className="text-sm text-muted">✓ Verified reviews from real contractors</Text>
             </View>
             <View className="flex-row items-center justify-center gap-2">
-              <Text className="text-sm text-muted">✓ Dispute Resolution Available</Text>
+              <Text className="text-sm text-muted">✓ Dispute resolution available</Text>
             </View>
           </View>
         </View>
       </ScrollView>
     </ScreenContainer>
+    </ScreenBackground>
   );
 }

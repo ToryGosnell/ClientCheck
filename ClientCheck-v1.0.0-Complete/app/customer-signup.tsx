@@ -155,8 +155,8 @@ export default function CustomerSignupScreen() {
               </View>
               <Text className="flex-1 text-sm text-muted">
                 I agree to the{" "}
-                <Text className="text-primary font-semibold">Terms of Service</Text> and{" "}
-                <Text className="text-primary font-semibold">Privacy Policy</Text>
+                <Text className="text-primary font-semibold" onPress={() => router.push("/terms" as never)}>Terms & Conditions</Text> and{" "}
+                <Text className="text-primary font-semibold" onPress={() => router.push("/privacy" as never)}>Privacy Policy</Text>
               </Text>
             </Pressable>
           </View>

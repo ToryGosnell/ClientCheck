@@ -40,9 +40,8 @@ export default function OnboardingScreen() {
       if (Platform.OS !== "web") {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
-      // Complete onboarding
       setTimeout(() => {
-        router.replace("/(tabs)");
+        router.replace("/contractor-paywall" as never);
       }, 500);
     }
   };

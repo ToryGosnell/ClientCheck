@@ -16,7 +16,7 @@ function resolveApiBaseUrl() {
     return "";
   }
 
-  return "http://localhost:3000";
+  return "https://clientcheck-production.up.railway.app";
 }
 
 export const API_BASE_URL = resolveApiBaseUrl();

@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/mysql2";
 import { contractorAnalytics, reviews, reviewDisputes } from "../drizzle/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, inArray } from "drizzle-orm";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -65,10 +65,13 @@ export async function recalculateContractorAnalytics(contractorUserId: number) {
     .where(eq(reviews.contractorUserId, contractorUserId));
 
   // Get all disputes on reviews by this contractor
-  const disputes = await db
-    .select()
-    .from(reviewDisputes)
-    .where(eq(reviewDisputes.reviewId, contractorReviews[0]?.id || 0));
+  const reviewIds = contractorReviews.map((r) => r.id);
+  const disputes = reviewIds.length > 0
+    ? await db
+        .select()
+        .from(reviewDisputes)
+        .where(inArray(reviewDisputes.reviewId, reviewIds))
+    : [];
 
   // Calculate metrics
   const totalReviewsSubmitted = contractorReviews.length;

@@ -1,7 +1,9 @@
-import { and, desc, eq, like, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
+import mysql, { type RowDataPacket } from "mysql2/promise";
 import {
   contractorProfiles,
+  customerResponses,
   customers,
   reviewHelpfulVotes,
   reviewDisputes,
@@ -9,6 +11,7 @@ import {
   disputePhotos,
   reviews,
   users,
+  type Customer,
   type InsertCustomer,
   type InsertReview,
   type InsertUser,
@@ -133,44 +136,406 @@ export async function upsertContractorProfile(
   }
 }
 
+export async function updateContractorLicense(userId: number, licenseNumber: string) {
+  const dbConn = await getDb();
+  if (!dbConn) throw new Error("Database not available");
+  const existing = await getContractorProfile(userId);
+  if (existing) {
+    await dbConn
+      .update(contractorProfiles)
+      .set({
+        licenseNumber,
+        verificationStatus: "pending",
+        verificationSubmittedAt: new Date(),
+      })
+      .where(eq(contractorProfiles.userId, userId));
+  } else {
+    await dbConn.insert(contractorProfiles).values({
+      userId,
+      licenseNumber,
+      verificationStatus: "pending",
+      verificationSubmittedAt: new Date(),
+    });
+  }
+}
+
 // ─── Customers ────────────────────────────────────────────────────────────────
 
-export async function searchCustomers(query: string, limit = 20) {
+/** Columns we may SELECT — intersected with SHOW COLUMNS so MySQL never references missing fields. */
+const CUSTOMERS_SELECT_COLUMNS: (keyof Customer)[] = [
+  "id",
+  "firstName",
+  "lastName",
+  "phone",
+  "email",
+  "address",
+  "city",
+  "state",
+  "zip",
+  "normalizedName",
+  "normalizedPhone",
+  "normalizedEmail",
+  "normalizedAddressKey",
+  "searchText",
+  "mergedIntoId",
+  "isDuplicate",
+  "overallRating",
+  "calculatedOverallScore",
+  "reviewCount",
+  "wouldWorkAgainYesCount",
+  "wouldWorkAgainNoCount",
+  "wouldWorkAgainNaCount",
+  "redFlagCount",
+  "criticalRedFlagCount",
+  "greenFlagCount",
+  "ratingPaymentReliability",
+  "ratingCommunication",
+  "ratingScopeChanges",
+  "ratingPropertyRespect",
+  "ratingPermitPulling",
+  "ratingOverallJobExperience",
+  "riskLevel",
+  "createdByUserId",
+  "createdAt",
+  "updatedAt",
+];
+
+let _mysqlPool: mysql.Pool | null = null;
+let _customersColumnSet: Set<string> | null = null;
+
+function getMysqlPool(): mysql.Pool | null {
+  const url = process.env.DATABASE_URL;
+  if (!url) return null;
+  if (!_mysqlPool) _mysqlPool = mysql.createPool(url);
+  return _mysqlPool;
+}
+
+/** Call after migrations if the server stays up (optional; restarts reload columns). */
+export function invalidateCustomersColumnCache() {
+  _customersColumnSet = null;
+}
+
+async function loadCustomersColumnSet(): Promise<Set<string>> {
+  if (_customersColumnSet) return _customersColumnSet;
+  const pool = getMysqlPool();
+  if (!pool) return new Set();
+  const [rows] = await pool.query<RowDataPacket[]>("SHOW COLUMNS FROM `customers`");
+  _customersColumnSet = new Set(rows.map((r) => String(r.Field)));
+  return _customersColumnSet;
+}
+
+function tickIdent(name: string): string {
+  if (!/^[a-zA-Z0-9_]+$/.test(name)) throw new Error(`Invalid SQL identifier: ${name}`);
+  return `\`${name}\``;
+}
+
+/** Map a DB row to `Customer` for tRPC when the live table has fewer columns than `drizzle/schema`. */
+function rowToCustomer(row: RowDataPacket): Customer {
+  const g = (k: string) => row[k];
+  const num = (k: string, d: number) => {
+    const v = g(k);
+    if (v == null || v === "") return d;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : d;
+  };
+  const str = (k: string, d = "") => (g(k) != null && g(k) !== "" ? String(g(k)) : d);
+  const strNull = (k: string) => (g(k) != null && String(g(k)) !== "" ? String(g(k)) : null);
+  const dec = (k: string, d = "0.00") => (g(k) != null ? String(g(k)) : d);
+  const bool = (k: string, d = false) => {
+    const v = g(k);
+    if (v === true || v === 1 || v === "1") return true;
+    if (v === false || v === 0 || v === "0") return false;
+    return d;
+  };
+  const dt = (k: string) => {
+    const v = g(k);
+    if (v == null) return new Date();
+    return v instanceof Date ? v : new Date(String(v));
+  };
+  return {
+    id: num("id", 0),
+    firstName: str("firstName", ""),
+    lastName: str("lastName", ""),
+    phone: str("phone", ""),
+    email: strNull("email"),
+    address: str("address", ""),
+    city: str("city", ""),
+    state: str("state", ""),
+    zip: str("zip", ""),
+    normalizedName: strNull("normalizedName"),
+    normalizedPhone: strNull("normalizedPhone"),
+    normalizedEmail: strNull("normalizedEmail"),
+    normalizedAddressKey: strNull("normalizedAddressKey"),
+    searchText: strNull("searchText"),
+    mergedIntoId: g("mergedIntoId") != null ? num("mergedIntoId", 0) : null,
+    isDuplicate: bool("isDuplicate", false),
+    overallRating: dec("overallRating", "0.00"),
+    calculatedOverallScore: dec("calculatedOverallScore", "0.00"),
+    reviewCount: num("reviewCount", 0),
+    wouldWorkAgainYesCount: num("wouldWorkAgainYesCount", 0),
+    wouldWorkAgainNoCount: num("wouldWorkAgainNoCount", 0),
+    wouldWorkAgainNaCount: num("wouldWorkAgainNaCount", 0),
+    redFlagCount: num("redFlagCount", 0),
+    criticalRedFlagCount: num("criticalRedFlagCount", 0),
+    greenFlagCount: num("greenFlagCount", 0),
+    ratingPaymentReliability: dec("ratingPaymentReliability", "0.00"),
+    ratingCommunication: dec("ratingCommunication", "0.00"),
+    ratingScopeChanges: dec("ratingScopeChanges", "0.00"),
+    ratingPropertyRespect: dec("ratingPropertyRespect", "0.00"),
+    ratingPermitPulling: dec("ratingPermitPulling", "0.00"),
+    ratingOverallJobExperience: dec("ratingOverallJobExperience", "0.00"),
+    riskLevel: (str("riskLevel", "unknown") as Customer["riskLevel"]) || "unknown",
+    createdByUserId: num("createdByUserId", 0),
+    createdAt: dt("createdAt"),
+    updatedAt: dt("updatedAt"),
+  };
+}
+
+/**
+ * Ranking CASE (lower tier = better). Only references columns present in `cols`.
+ * Tiers: name → normalizedName → city → searchText → phone/email/normalizedPhone → state.
+ */
+function buildSearchRankCase(
+  cols: Set<string>,
+  qt: string,
+  q: string,
+  digitsOnly: string,
+): { sql: string; params: unknown[] } {
+  const ql = qt.toLowerCase();
+  const chunks: string[] = [];
+  const params: unknown[] = [];
+  const hasFN = cols.has("firstName");
+  const hasLN = cols.has("lastName");
+
+  if (hasFN && hasLN) {
+    chunks.push(`WHEN LOWER(TRIM(CONCAT(${tickIdent("firstName")}, ' ', ${tickIdent("lastName")}))) = ? THEN 1`);
+    params.push(ql);
+    chunks.push(
+      `WHEN LOWER(TRIM(${tickIdent("firstName")})) = ? OR LOWER(TRIM(${tickIdent("lastName")})) = ? THEN 2`,
+    );
+    params.push(ql, ql);
+    chunks.push(
+      `WHEN LOWER(TRIM(CONCAT(${tickIdent("firstName")}, ' ', ${tickIdent("lastName")}))) LIKE CONCAT(?, '%') THEN 3`,
+    );
+    params.push(ql);
+    chunks.push(
+      `WHEN LOWER(TRIM(${tickIdent("firstName")})) LIKE CONCAT(?, '%') OR LOWER(TRIM(${tickIdent("lastName")})) LIKE CONCAT(?, '%') THEN 4`,
+    );
+    params.push(ql, ql);
+    chunks.push(
+      `WHEN LOWER(TRIM(CONCAT(${tickIdent("firstName")}, ' ', ${tickIdent("lastName")}))) LIKE CONCAT('%', ?, '%') THEN 5`,
+    );
+    params.push(ql);
+    chunks.push(
+      `WHEN LOWER(TRIM(${tickIdent("firstName")})) LIKE CONCAT('%', ?, '%') OR LOWER(TRIM(${tickIdent("lastName")})) LIKE CONCAT('%', ?, '%') THEN 6`,
+    );
+    params.push(ql, ql, ql);
+  } else if (hasFN) {
+    chunks.push(`WHEN LOWER(TRIM(${tickIdent("firstName")})) = ? THEN 1`);
+    params.push(ql);
+    chunks.push(`WHEN LOWER(TRIM(${tickIdent("firstName")})) LIKE CONCAT(?, '%') THEN 3`);
+    params.push(ql);
+    chunks.push(`WHEN LOWER(TRIM(${tickIdent("firstName")})) LIKE CONCAT('%', ?, '%') THEN 5`);
+    params.push(ql);
+  } else if (hasLN) {
+    chunks.push(`WHEN LOWER(TRIM(${tickIdent("lastName")})) = ? THEN 1`);
+    params.push(ql);
+    chunks.push(`WHEN LOWER(TRIM(${tickIdent("lastName")})) LIKE CONCAT(?, '%') THEN 3`);
+    params.push(ql);
+    chunks.push(`WHEN LOWER(TRIM(${tickIdent("lastName")})) LIKE CONCAT('%', ?, '%') THEN 5`);
+    params.push(ql);
+  }
+
+  if (cols.has("normalizedName")) {
+    chunks.push(
+      `WHEN COALESCE(${tickIdent("normalizedName")}, '') <> '' AND LOWER(TRIM(${tickIdent("normalizedName")})) LIKE CONCAT(?, '%') THEN 7`,
+    );
+    params.push(ql);
+    chunks.push(
+      `WHEN COALESCE(${tickIdent("normalizedName")}, '') <> '' AND LOWER(TRIM(${tickIdent("normalizedName")})) LIKE CONCAT('%', ?, '%') THEN 8`,
+    );
+    params.push(ql);
+  }
+  if (cols.has("city")) {
+    chunks.push(`WHEN LOWER(TRIM(${tickIdent("city")})) LIKE CONCAT('%', ?, '%') THEN 9`);
+    params.push(ql);
+  }
+  if (cols.has("searchText")) {
+    chunks.push(
+      `WHEN COALESCE(${tickIdent("searchText")}, '') <> '' AND LOWER(${tickIdent("searchText")}) LIKE CONCAT('%', ?, '%') THEN 10`,
+    );
+    params.push(ql);
+  }
+
+  const t11: string[] = [];
+  const t11p: unknown[] = [];
+  if (cols.has("phone")) {
+    t11.push(`${tickIdent("phone")} LIKE ?`);
+    t11p.push(q);
+  }
+  if (cols.has("email")) {
+    t11.push(`LOWER(TRIM(COALESCE(${tickIdent("email")}, ''))) LIKE ?`);
+    t11p.push(`%${ql}%`);
+  }
+  if (digitsOnly.length >= 2 && cols.has("normalizedPhone")) {
+    t11.push(`LOWER(TRIM(${tickIdent("normalizedPhone")})) LIKE ?`);
+    t11p.push(`%${digitsOnly}%`);
+  }
+  if (t11.length) {
+    chunks.push(`WHEN (${t11.join(" OR ")}) THEN 11`);
+    params.push(...t11p);
+  }
+
+  if (cols.has("state")) {
+    chunks.push(`WHEN LOWER(TRIM(${tickIdent("state")})) LIKE CONCAT('%', ?, '%') THEN 12`);
+    params.push(ql);
+  }
+
+  const inner = chunks.length ? chunks.join("\n    ") : "";
+  const rankSql = inner ? `CASE\n    ${inner}\n    ELSE 99\n  END` : "99";
+  return { sql: rankSql, params };
+}
+
+export async function searchCustomers(query: string, limit = 15, state?: string, city?: string) {
   const db = await getDb();
-  if (!db) return [];
+  if (!db) {
+    console.warn("[searchCustomers] getDb() unavailable");
+    return [];
+  }
   const q = `%${query}%`;
+  const qt = query.trim();
+  const digitsOnly = query.replace(/\D/g, "");
+  const normalizedQ = `%${qt.toLowerCase().replace(/\s+/g, " ")}%`;
+
+  const matchOr = [
+    like(customers.firstName, q),
+    like(customers.lastName, q),
+    like(customers.phone, q),
+    like(customers.email, q),
+    like(customers.city, q),
+    like(customers.state, q),
+    sql`CONCAT(${customers.firstName}, ' ', ${customers.lastName}) LIKE ${q}`,
+    like(customers.normalizedName, normalizedQ),
+    like(customers.searchText, normalizedQ),
+  ];
+  if (digitsOnly.length >= 2) {
+    matchOr.push(like(customers.normalizedPhone, `%${digitsOnly}%`));
+  }
+
+  const conditions = [eq(customers.isDuplicate, false), or(...matchOr)];
+
+  const stateUpper = state && state.length === 2 ? state.toUpperCase() : null;
+  if (stateUpper) conditions.push(eq(customers.state, stateUpper));
+  if (city) conditions.push(like(customers.city, `%${city}%`));
+
+  /**
+   * Ranking (lower tier = higher in results). Name tiers use LOWER() so "karen" ranks like "Karen".
+   *
+   * 1–6: display name (exact full → exact first/last → prefix full → prefix first/last → contains full → contains first/last)
+   * 7–8: normalizedName prefix / contains
+   * 9: city
+   * 10: searchText
+   * 11: phone / email / normalizedPhone (digits, only if query has 2+ digits)
+   * 12: state column text
+   *
+   * With a 2-letter state filter, WHERE state = ? already limits rows to that state.
+   * Same tier: higher reviewCount, then newer updatedAt.
+   */
+  const nameRank =
+    digitsOnly.length >= 2
+      ? sql`CASE
+    WHEN LOWER(TRIM(CONCAT(${customers.firstName}, ' ', ${customers.lastName}))) = LOWER(${qt}) THEN 1
+    WHEN LOWER(TRIM(${customers.firstName})) = LOWER(${qt}) OR LOWER(TRIM(${customers.lastName})) = LOWER(${qt}) THEN 2
+    WHEN LOWER(TRIM(CONCAT(${customers.firstName}, ' ', ${customers.lastName}))) LIKE CONCAT(LOWER(${qt}), '%') THEN 3
+    WHEN LOWER(TRIM(${customers.firstName})) LIKE CONCAT(LOWER(${qt}), '%')
+      OR LOWER(TRIM(${customers.lastName})) LIKE CONCAT(LOWER(${qt}), '%') THEN 4
+    WHEN LOWER(TRIM(CONCAT(${customers.firstName}, ' ', ${customers.lastName}))) LIKE CONCAT('%', LOWER(${qt}), '%') THEN 5
+    WHEN LOWER(TRIM(${customers.firstName})) LIKE CONCAT('%', LOWER(${qt}), '%')
+      OR LOWER(TRIM(${customers.lastName})) LIKE CONCAT('%', LOWER(${qt}), '%') THEN 6
+    WHEN COALESCE(${customers.normalizedName}, '') <> '' AND LOWER(TRIM(${customers.normalizedName})) LIKE CONCAT(LOWER(${qt}), '%') THEN 7
+    WHEN COALESCE(${customers.normalizedName}, '') <> '' AND LOWER(${customers.normalizedName}) LIKE CONCAT('%', LOWER(${qt}), '%') THEN 8
+    WHEN LOWER(TRIM(${customers.city})) LIKE CONCAT('%', LOWER(${qt}), '%') THEN 9
+    WHEN COALESCE(${customers.searchText}, '') <> '' AND LOWER(${customers.searchText}) LIKE CONCAT('%', LOWER(${qt}), '%') THEN 10
+    WHEN ${customers.phone} LIKE ${q}
+      OR LOWER(TRIM(COALESCE(${customers.email}, ''))) LIKE CONCAT('%', LOWER(${qt}), '%')
+      OR LOWER(TRIM(${customers.normalizedPhone})) LIKE ${`%${digitsOnly}%`} THEN 11
+    WHEN LOWER(TRIM(${customers.state})) LIKE CONCAT('%', LOWER(${qt}), '%') THEN 12
+    ELSE 99
+  END`
+      : sql`CASE
+    WHEN LOWER(TRIM(CONCAT(${customers.firstName}, ' ', ${customers.lastName}))) = LOWER(${qt}) THEN 1
+    WHEN LOWER(TRIM(${customers.firstName})) = LOWER(${qt}) OR LOWER(TRIM(${customers.lastName})) = LOWER(${qt}) THEN 2
+    WHEN LOWER(TRIM(CONCAT(${customers.firstName}, ' ', ${customers.lastName}))) LIKE CONCAT(LOWER(${qt}), '%') THEN 3
+    WHEN LOWER(TRIM(${customers.firstName})) LIKE CONCAT(LOWER(${qt}), '%')
+      OR LOWER(TRIM(${customers.lastName})) LIKE CONCAT(LOWER(${qt}), '%') THEN 4
+    WHEN LOWER(TRIM(CONCAT(${customers.firstName}, ' ', ${customers.lastName}))) LIKE CONCAT('%', LOWER(${qt}), '%') THEN 5
+    WHEN LOWER(TRIM(${customers.firstName})) LIKE CONCAT('%', LOWER(${qt}), '%')
+      OR LOWER(TRIM(${customers.lastName})) LIKE CONCAT('%', LOWER(${qt}), '%') THEN 6
+    WHEN COALESCE(${customers.normalizedName}, '') <> '' AND LOWER(TRIM(${customers.normalizedName})) LIKE CONCAT(LOWER(${qt}), '%') THEN 7
+    WHEN COALESCE(${customers.normalizedName}, '') <> '' AND LOWER(${customers.normalizedName}) LIKE CONCAT('%', LOWER(${qt}), '%') THEN 8
+    WHEN LOWER(TRIM(${customers.city})) LIKE CONCAT('%', LOWER(${qt}), '%') THEN 9
+    WHEN COALESCE(${customers.searchText}, '') <> '' AND LOWER(${customers.searchText}) LIKE CONCAT('%', LOWER(${qt}), '%') THEN 10
+    WHEN ${customers.phone} LIKE ${q}
+      OR LOWER(TRIM(COALESCE(${customers.email}, ''))) LIKE CONCAT('%', LOWER(${qt}), '%') THEN 11
+    WHEN LOWER(TRIM(${customers.state})) LIKE CONCAT('%', LOWER(${qt}), '%') THEN 12
+    ELSE 99
+  END`;
+
   const results = await db
     .select()
     .from(customers)
-    .where(
-      or(
-        like(customers.firstName, q),
-        like(customers.lastName, q),
-        like(customers.phone, q),
-        like(customers.address, q),
-        like(customers.city, q),
-        sql`CONCAT(${customers.firstName}, ' ', ${customers.lastName}) LIKE ${q}`
-      )
-    )
-    .orderBy(desc(customers.reviewCount))
+    .where(and(...conditions))
+    .orderBy(nameRank, desc(customers.reviewCount), desc(customers.updatedAt))
     .limit(limit);
 
-  // Enrich each result with aggregated ratings from merged duplicates
-  const enrichedResults = await Promise.all(
-    results.map(async (customer) => {
-      const reviewData = await getReviewsForCustomer(customer.id);
-      const aggregatedRatings = (reviewData as any).aggregatedRatings || {};
-      return {
-        ...customer,
-        // Use aggregated overall rating if available, otherwise use customer's rating
-        overallRating: aggregatedRatings.overallRating || customer.overallRating,
-        // Use review count from aggregated data
-        reviewCount: aggregatedRatings.reviewCount || customer.reviewCount,
-      };
-    })
-  );
+  if (process.env.NODE_ENV !== "production") {
+    console.log("[searchCustomers]", {
+      qt,
+      stateUpper,
+      city: city ?? null,
+      limit,
+      rowCount: results.length,
+    });
+  }
 
-  return enrichedResults;
+  return results;
+}
+
+/**
+ * Public customer search for REST GET /api/customers?search=
+ * Case-insensitive on name (first, last, full), email, phone; digit match on normalized phone.
+ */
+export async function searchCustomersApi(query: string, limit = 500) {
+  const db = await getDb();
+  if (!db) return [];
+  const raw = query.trim();
+  if (raw.length < 2) return [];
+
+  const lowerPattern = `%${raw.toLowerCase()}%`;
+  const digits = raw.replace(/\D/g, "");
+
+  const parts = [
+    sql`LOWER(CONCAT(COALESCE(${customers.firstName},''), ' ', COALESCE(${customers.lastName},''))) LIKE ${lowerPattern}`,
+    sql`LOWER(COALESCE(${customers.firstName},'')) LIKE ${lowerPattern}`,
+    sql`LOWER(COALESCE(${customers.lastName},'')) LIKE ${lowerPattern}`,
+    sql`LOWER(COALESCE(${customers.email},'')) LIKE ${lowerPattern}`,
+    sql`LOWER(COALESCE(${customers.phone},'')) LIKE ${lowerPattern}`,
+  ];
+  if (digits.length >= 2) {
+    parts.push(like(customers.normalizedPhone, `%${digits}%`));
+  }
+
+  const results = await db
+    .select()
+    .from(customers)
+    .where(and(eq(customers.isDuplicate, false), or(...parts)))
+    .orderBy(
+      desc(customers.reviewCount),
+      desc(customers.updatedAt),
+    )
+    .limit(Math.min(limit, 500));
+
+  return results;
 }
 
 export async function getCustomerById(id: number) {
@@ -196,8 +561,142 @@ export async function getCustomerByPhone(phone: string) {
 export async function createCustomer(data: InsertCustomer) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(customers).values(data);
-  return result[0].insertId as number;
+  const { normalizeName, normalizePhone, normalizeEmail, normalizeAddress, buildCustomerSearchText } = await import("../shared/customer-helpers");
+  const enriched = {
+    ...data,
+    normalizedName: normalizeName(`${data.firstName} ${data.lastName}`),
+    normalizedPhone: normalizePhone(data.phone) ?? data.phone,
+    normalizedEmail: normalizeEmail(data.email as string),
+    normalizedAddressKey: normalizeAddress(data.address as string, data.city as string, data.state as string, data.zip as string),
+    searchText: buildCustomerSearchText(data as any),
+  };
+  const result = await db.insert(customers).values(enriched);
+  const id = result[0].insertId as number;
+  void import("./algolia-customers").then(({ scheduleAlgoliaCustomerSync }) =>
+    scheduleAlgoliaCustomerSync(id),
+  );
+  return id;
+}
+
+/**
+ * Find an existing customer by normalized identifiers, or create a new one.
+ * Priority: exact email > exact phone > exact address+name > name+location.
+ */
+export async function findOrCreateCustomer(
+  data: InsertCustomer,
+): Promise<{ id: number; isNew: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const { normalizeName, normalizePhone, normalizeEmail, normalizeAddress } = await import("../shared/customer-helpers");
+
+  const nEmail = normalizeEmail(data.email as string);
+  const nPhone = normalizePhone(data.phone);
+  const nName = normalizeName(`${data.firstName} ${data.lastName}`);
+  const nAddr = normalizeAddress(data.address as string, data.city as string, data.state as string, data.zip as string);
+
+  // 1. Match by exact normalized email
+  if (nEmail) {
+    const rows = await db.select().from(customers)
+      .where(and(eq(customers.normalizedEmail, nEmail), eq(customers.isDuplicate, false)))
+      .limit(1);
+    if (rows[0]) return { id: rows[0].id, isNew: false };
+  }
+
+  // 2. Match by exact normalized phone
+  if (nPhone) {
+    const rows = await db.select().from(customers)
+      .where(and(eq(customers.normalizedPhone, nPhone), eq(customers.isDuplicate, false)))
+      .limit(1);
+    if (rows[0]) return { id: rows[0].id, isNew: false };
+  }
+
+  // 3. Match by normalized address key
+  if (nAddr && nAddr.length > 5) {
+    const rows = await db.select().from(customers)
+      .where(and(eq(customers.normalizedAddressKey, nAddr), eq(customers.isDuplicate, false)))
+      .limit(1);
+    if (rows[0]) return { id: rows[0].id, isNew: false };
+  }
+
+  // 4. Match by normalized name + city/state
+  if (nName && (data.city || data.state)) {
+    const nameQ = nName;
+    const rows = await db.select().from(customers)
+      .where(and(
+        eq(customers.normalizedName, nameQ),
+        eq(customers.city, data.city || ""),
+        eq(customers.state, data.state || ""),
+        eq(customers.isDuplicate, false),
+      ))
+      .limit(1);
+    if (rows[0]) return { id: rows[0].id, isNew: false };
+  }
+
+  // No match — create new
+  const id = await createCustomer(data);
+  return { id, isNew: true };
+}
+
+/**
+ * Find potential customer matches based on normalized fields.
+ * Returns ranked matches — exact identifier matches first, then name+location.
+ */
+export async function findPotentialCustomerMatches(input: {
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+}, limit = 10) {
+  const db = await getDb();
+  if (!db) return [];
+  const {
+    normalizeName, normalizePhone, normalizeEmail, normalizeAddress,
+  } = await import("../shared/customer-helpers");
+
+  const nPhone = normalizePhone(input.phone);
+  const nEmail = normalizeEmail(input.email);
+  const nName = input.firstName && input.lastName
+    ? normalizeName(`${input.firstName} ${input.lastName}`)
+    : null;
+  const nAddr = normalizeAddress(input.address, input.city, input.state, input.zip);
+
+  const conditions: ReturnType<typeof eq>[] = [];
+  if (nEmail) conditions.push(eq(customers.normalizedEmail, nEmail));
+  if (nPhone) conditions.push(eq(customers.normalizedPhone, nPhone));
+  if (nAddr && nAddr.length > 5) conditions.push(eq(customers.normalizedAddressKey, nAddr));
+  if (nName) {
+    if (input.city || input.state) {
+      conditions.push(
+        sql`${customers.normalizedName} = ${nName} AND ${customers.city} = ${input.city || ""} AND ${customers.state} = ${input.state || ""}` as any,
+      );
+    }
+    conditions.push(eq(customers.normalizedName, nName));
+  }
+
+  if (conditions.length === 0) return [];
+
+  const rows = await db.select().from(customers)
+    .where(and(eq(customers.isDuplicate, false), or(...conditions)))
+    .orderBy(desc(customers.reviewCount))
+    .limit(limit);
+
+  // Rank: exact phone/email = 100, address = 80, name+location = 60, name-only = 40
+  return rows.map((c) => {
+    let matchScore = 0;
+    const cNorm = c.normalizedPhone;
+    if (nPhone && cNorm === nPhone) matchScore = Math.max(matchScore, 100);
+    if (nEmail && c.normalizedEmail === nEmail) matchScore = Math.max(matchScore, 100);
+    if (nAddr && c.normalizedAddressKey === nAddr) matchScore = Math.max(matchScore, 80);
+    if (nName && c.normalizedName === nName) {
+      const locMatch = c.city === (input.city || "") && c.state === (input.state || "");
+      matchScore = Math.max(matchScore, locMatch ? 60 : 40);
+    }
+    return { ...c, matchScore };
+  }).sort((a, b) => b.matchScore - a.matchScore);
 }
 
 export async function getRecentlyFlaggedCustomers(limit = 10) {
@@ -224,6 +723,50 @@ export async function getTopRatedCustomers(limit = 10) {
 
 // ─── Reviews ──────────────────────────────────────────────────────────────────
 
+export async function getReviewById(reviewId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select({
+      id: reviews.id,
+      customerId: reviews.customerId,
+      contractorUserId: reviews.contractorUserId,
+      overallRating: reviews.overallRating,
+      calculatedOverallRating: reviews.calculatedOverallRating,
+      ratingPaymentReliability: reviews.ratingPaymentReliability,
+      ratingCommunication: reviews.ratingCommunication,
+      ratingScopeChanges: reviews.ratingScopeChanges,
+      ratingPropertyRespect: reviews.ratingPropertyRespect,
+      ratingPermitPulling: reviews.ratingPermitPulling,
+      ratingOverallJobExperience: reviews.ratingOverallJobExperience,
+      categoryDataJson: reviews.categoryDataJson,
+      wouldWorkAgain: reviews.wouldWorkAgain,
+      reviewText: reviews.reviewText,
+      jobType: reviews.jobType,
+      jobDate: reviews.jobDate,
+      jobAmount: reviews.jobAmount,
+      redFlags: reviews.redFlags,
+      greenFlags: reviews.greenFlags,
+      helpfulCount: reviews.helpfulCount,
+      createdAt: reviews.createdAt,
+      moderationStatus: reviews.moderationStatus,
+      contractorName: users.name,
+      contractorTrade: contractorProfiles.trade,
+      contractorVerified: contractorProfiles.verificationStatus,
+      customerFirstName: customers.firstName,
+      customerLastName: customers.lastName,
+      customerCity: customers.city,
+      customerState: customers.state,
+    })
+    .from(reviews)
+    .leftJoin(users, eq(reviews.contractorUserId, users.id))
+    .leftJoin(contractorProfiles, eq(reviews.contractorUserId, contractorProfiles.userId))
+    .leftJoin(customers, eq(reviews.customerId, customers.id))
+    .where(eq(reviews.id, reviewId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export async function getReviewsForCustomer(customerId: number) {
   const db = await getDb();
   if (!db) return { reviews: [], aggregatedRatings: {} };
@@ -243,21 +786,27 @@ export async function getReviewsForCustomer(customerId: number) {
       customerId: reviews.customerId,
       contractorUserId: reviews.contractorUserId,
       overallRating: reviews.overallRating,
+      calculatedOverallRating: reviews.calculatedOverallRating,
       ratingPaymentReliability: reviews.ratingPaymentReliability,
       ratingCommunication: reviews.ratingCommunication,
       ratingScopeChanges: reviews.ratingScopeChanges,
       ratingPropertyRespect: reviews.ratingPropertyRespect,
       ratingPermitPulling: reviews.ratingPermitPulling,
       ratingOverallJobExperience: reviews.ratingOverallJobExperience,
+      categoryDataJson: reviews.categoryDataJson,
+      wouldWorkAgain: reviews.wouldWorkAgain,
       reviewText: reviews.reviewText,
       jobType: reviews.jobType,
       jobDate: reviews.jobDate,
       jobAmount: reviews.jobAmount,
       redFlags: reviews.redFlags,
+      greenFlags: reviews.greenFlags,
       helpfulCount: reviews.helpfulCount,
       createdAt: reviews.createdAt,
       contractorName: users.name,
       contractorTrade: contractorProfiles.trade,
+      contractorVerified: contractorProfiles.verificationStatus,
+      moderationStatus: reviews.moderationStatus,
     })
     .from(reviews)
     .leftJoin(users, eq(reviews.contractorUserId, users.id))
@@ -265,36 +814,85 @@ export async function getReviewsForCustomer(customerId: number) {
     .where(sql`${reviews.customerId} IN (${sql.raw(customerIds.join(","))})`)
     .orderBy(desc(reviews.createdAt));
 
-  // Calculate aggregated ratings
+  const { legacyToCategories, aggregateCategoryRatings, legacyToWouldWorkAgain, deserializeNewCategories, getFinalOverallRating } = await import("../shared/review-categories");
+  const { parseFlags: parseFlagsHelper } = await import("../shared/review-flags");
+
+  const perReviewCategories = allReviews.map((r) => {
+    const parsed = deserializeNewCategories(r.categoryDataJson);
+    return parsed?.categories ?? legacyToCategories(r as Record<string, unknown>);
+  });
+
+  const aggregatedCategories = aggregateCategoryRatings(perReviewCategories);
+
+  // overallRating in the DB already reflects the wouldWorkAgain override,
+  // so the aggregate is a straight average of stored values.
   const aggregatedRatings = {
-    overallRating: 0,
+    overallRating: allReviews.length > 0
+      ? allReviews.reduce((sum, r) => sum + (r.overallRating || 0), 0) / allReviews.length
+      : 0,
+    calculatedOverallRating: allReviews.length > 0
+      ? allReviews.reduce((sum, r) => {
+          const parsed = deserializeNewCategories(r.categoryDataJson);
+          const rawScore = parsed ? (parseFloat((parsed as any).calculatedOverallRating ?? "0") || null) : null;
+          return sum + (rawScore ?? r.overallRating ?? 0);
+        }, 0) / allReviews.length
+      : 0,
+    reviewCount: allReviews.length,
+    categories: aggregatedCategories,
+    wouldNotWorkAgainCount: allReviews.filter((r) => r.wouldWorkAgain === "no").length,
+    redFlagCounts: (() => {
+      const counts: Record<string, number> = {};
+      for (const r of allReviews) {
+        const { redFlags: rf } = parseFlagsHelper(r.redFlags);
+        for (const f of rf) { counts[f] = (counts[f] || 0) + 1; }
+      }
+      return counts;
+    })(),
+    greenFlagCounts: (() => {
+      const counts: Record<string, number> = {};
+      for (const r of allReviews) {
+        const { greenFlags: gf } = parseFlagsHelper(r.redFlags);
+        for (const f of gf) { counts[f] = (counts[f] || 0) + 1; }
+      }
+      return counts;
+    })(),
     ratingPaymentReliability: 0,
     ratingCommunication: 0,
     ratingScopeChanges: 0,
     ratingPropertyRespect: 0,
     ratingPermitPulling: 0,
     ratingOverallJobExperience: 0,
-    reviewCount: allReviews.length,
   };
 
   if (allReviews.length > 0) {
-    aggregatedRatings.overallRating =
-      allReviews.reduce((sum, r) => sum + (r.overallRating || 0), 0) / allReviews.length;
-    aggregatedRatings.ratingPaymentReliability =
-      allReviews.reduce((sum, r) => sum + (r.ratingPaymentReliability || 0), 0) / allReviews.length;
-    aggregatedRatings.ratingCommunication =
-      allReviews.reduce((sum, r) => sum + (r.ratingCommunication || 0), 0) / allReviews.length;
-    aggregatedRatings.ratingScopeChanges =
-      allReviews.reduce((sum, r) => sum + (r.ratingScopeChanges || 0), 0) / allReviews.length;
-    aggregatedRatings.ratingPropertyRespect =
-      allReviews.reduce((sum, r) => sum + (r.ratingPropertyRespect || 0), 0) / allReviews.length;
-    aggregatedRatings.ratingPermitPulling =
-      allReviews.reduce((sum, r) => sum + (r.ratingPermitPulling || 0), 0) / allReviews.length;
-    aggregatedRatings.ratingOverallJobExperience =
-      allReviews.reduce((sum, r) => sum + (r.ratingOverallJobExperience || 0), 0) / allReviews.length;
+    const legacyAvg = (field: string) =>
+      allReviews.reduce((s, r) => s + ((r as any)[field] || 0), 0) / allReviews.length;
+    aggregatedRatings.ratingPaymentReliability = legacyAvg("ratingPaymentReliability");
+    aggregatedRatings.ratingCommunication = legacyAvg("ratingCommunication");
+    aggregatedRatings.ratingScopeChanges = legacyAvg("ratingScopeChanges");
+    aggregatedRatings.ratingPropertyRespect = legacyAvg("ratingPropertyRespect");
+    aggregatedRatings.ratingPermitPulling = legacyAvg("ratingPermitPulling");
+    aggregatedRatings.ratingOverallJobExperience = legacyAvg("ratingOverallJobExperience");
   }
 
-  return { reviews: allReviews, aggregatedRatings };
+  const reviewIdsWithResponse = new Set<number>();
+  if (allReviews.length > 0) {
+    const ids = allReviews.map((r) => r.id);
+    const respRows = await db
+      .select({ reviewId: customerResponses.reviewId })
+      .from(customerResponses)
+      .where(inArray(customerResponses.reviewId, ids));
+    for (const row of respRows) {
+      reviewIdsWithResponse.add(row.reviewId);
+    }
+  }
+
+  const reviewsWithMeta = allReviews.map((r) => ({
+    ...r,
+    hasCustomerResponse: reviewIdsWithResponse.has(r.id),
+  }));
+
+  return { reviews: reviewsWithMeta, aggregatedRatings };
 }
 
 export async function getReviewsByContractor(contractorUserId: number) {
@@ -419,69 +1017,69 @@ export async function getRecentReviews(limit = 20) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-async function recalculateCustomerRatings(customerId: number) {
+/**
+ * Recompute all customer aggregate fields from their reviews.
+ * Includes reviews from merged duplicate customers.
+ * Exported so it can be called from routers and admin tools.
+ */
+export async function recomputeCustomerAggregates(customerId: number) {
   const db = await getDb();
   if (!db) return;
+
+  // Include reviews from merged duplicates
+  const mergedCustomers = await db
+    .select({ id: customers.id })
+    .from(customers)
+    .where(eq(customers.mergedIntoId, customerId));
+  const customerIds = [customerId, ...mergedCustomers.map((c) => c.id)];
+
   const allReviews = await db
     .select()
     .from(reviews)
-    .where(eq(reviews.customerId, customerId));
+    .where(sql`${reviews.customerId} IN (${sql.raw(customerIds.join(","))})`);
 
-  if (allReviews.length === 0) {
-    await db
-      .update(customers)
-      .set({
-        overallRating: "0.00",
-        reviewCount: 0,
-        ratingPaymentReliability: "0.00",
-        ratingCommunication: "0.00",
-        ratingScopeChanges: "0.00",
-        ratingPropertyRespect: "0.00",
-        ratingPermitPulling: "0.00",
-        ratingOverallJobExperience: "0.00",
-        riskLevel: "unknown",
-      })
-      .where(eq(customers.id, customerId));
-    return;
-  }
+  const { computeCustomerAggregates } = await import("../shared/customer-helpers");
+  const agg = computeCustomerAggregates(allReviews as any);
 
-  const avg = (field: keyof (typeof allReviews)[0]) => {
-    const sum = allReviews.reduce((acc, r) => acc + ((r[field] as number) || 0), 0);
+  // Legacy flat averages
+  const avg = (field: string) => {
+    if (allReviews.length === 0) return "0.00";
+    const sum = allReviews.reduce((s, r) => s + ((r as any)[field] || 0), 0);
     return (sum / allReviews.length).toFixed(2);
   };
-
-  const overallAvg = parseFloat(avg("overallRating"));
-  const riskLevel = overallAvg === 0 ? "unknown" : overallAvg >= 4.0 ? "low" : overallAvg >= 2.5 ? "medium" : "high";
 
   await db
     .update(customers)
     .set({
-      overallRating: avg("overallRating"),
-      reviewCount: allReviews.length,
+      overallRating: agg.overallScore,
+      calculatedOverallScore: agg.calculatedOverallScore,
+      reviewCount: agg.reviewCount,
+      wouldWorkAgainYesCount: agg.wouldWorkAgainYesCount,
+      wouldWorkAgainNoCount: agg.wouldWorkAgainNoCount,
+      wouldWorkAgainNaCount: agg.wouldWorkAgainNaCount,
+      redFlagCount: agg.redFlagCount,
+      criticalRedFlagCount: agg.criticalRedFlagCount,
+      greenFlagCount: agg.greenFlagCount,
       ratingPaymentReliability: avg("ratingPaymentReliability"),
       ratingCommunication: avg("ratingCommunication"),
       ratingScopeChanges: avg("ratingScopeChanges"),
       ratingPropertyRespect: avg("ratingPropertyRespect"),
       ratingPermitPulling: avg("ratingPermitPulling"),
       ratingOverallJobExperience: avg("ratingOverallJobExperience"),
-      riskLevel,
+      riskLevel: agg.riskLevel,
     })
     .where(eq(customers.id, customerId));
+
+  void import("./algolia-customers").then(({ scheduleAlgoliaCustomerSync }) =>
+    scheduleAlgoliaCustomerSync(customerId),
+  );
 }
+
+/** @deprecated Use recomputeCustomerAggregates instead */
+const recalculateCustomerRatings = recomputeCustomerAggregates;
 
 
 // ─── Review Disputes ──────────────────────────────────────────────────────────
-
-export async function getReviewById(reviewId: number) {
-  const db = await getDb();
-  if (!db) return null;
-  const result = await db
-    .select()
-    .from(reviews)
-    .where(eq(reviews.id, reviewId))
-    .limit(1);
-  return result[0] || null;
-}
 
 export async function addReviewPhotos(reviewId: number, photoUrls: string[]) {
   const db = await getDb();
@@ -499,24 +1097,44 @@ export async function addDisputePhotos(disputeId: number, photoUrls: string[]) {
   }
 }
 
+type DisputeReasonDb =
+  | "incorrect_information"
+  | "wrong_individual"
+  | "harassment_abuse"
+  | "privacy_concern"
+  | "outdated_information"
+  | "other";
+
 export async function createDispute(data: {
   reviewId: number;
   customerId: number;
-  status: "open" | "responded" | "resolved" | "dismissed";
+  status:
+    | "open"
+    | "responded"
+    | "resolved"
+    | "dismissed"
+    | "pending"
+    | "under_review"
+    | "awaiting_info"
+    | "rejected";
+  reason?: DisputeReasonDb | null;
+  customerResponse?: string | null;
 }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  
+
   const result = await db.insert(reviewDisputes).values({
     reviewId: data.reviewId,
     customerId: data.customerId,
     status: data.status,
+    reason: data.reason ?? null,
+    customerResponse: data.customerResponse ?? null,
     createdAt: new Date(),
     updatedAt: new Date(),
   });
 
   return {
-    id: (result as any).insertId,
+    id: (result[0] as any).insertId as number,
     ...data,
     createdAt: new Date(),
     updatedAt: new Date(),

@@ -24,6 +24,20 @@ const bundleId =
 const timestamp = bundleId.split(".").pop()?.replace(/^t/, "") ?? "";
 const schemeFromBundleId = `clientcheck`;
 
+/** True when CLI is doing a static web export — skip @stripe/stripe-react-native config plugin (iOS/Android only; crashes if props are missing on web). */
+function isExpoExportWebOnly(): boolean {
+  const argv = process.argv;
+  if (!argv.includes("export")) return false;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--platform" || arg === "-p") {
+      if (argv[i + 1] === "web") return true;
+    }
+    if (arg.startsWith("--platform=") && arg.slice("--platform=".length) === "web") return true;
+  }
+  return false;
+}
+
 const env = {
   // App branding - update these values directly (do not use env vars)
   appName: "ClientCheck",
@@ -91,7 +105,9 @@ const config: ExpoConfig = {
     favicon: "./assets/images/favicon.png",
   },
   plugins: [
+    "@sentry/react-native",
     "expo-router",
+    "expo-localization",
     [
       "expo-splash-screen",
       {
@@ -118,7 +134,16 @@ const config: ExpoConfig = {
       },
     ],
     "expo-notifications",
-    "@stripe/stripe-react-native",
+    ...(isExpoExportWebOnly()
+      ? []
+      : ([
+          [
+            "@stripe/stripe-react-native",
+            {
+              merchantIdentifier: "merchant.com.torygosnell.clientcheck",
+            },
+          ],
+        ] as NonNullable<ExpoConfig["plugins"]>)),
   ],
   experiments: {
     typedRoutes: true,

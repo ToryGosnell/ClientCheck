@@ -1,190 +1,251 @@
-import { and, eq } from "drizzle-orm";
-import { subscriptions, type InsertSubscription } from "../drizzle/schema";
+import { eq } from "drizzle-orm";
+import { subscriptions } from "../drizzle/schema";
 import { getDb } from "./db";
+import {
+  CONTRACTOR_ANNUAL_PRICE_CENTS,
+  CUSTOMER_MONTHLY_PRICE_CENTS,
+  type BillingPlanType,
+} from "../shared/billing-config";
 
-const TRIAL_DAYS = 90;
-const SUBSCRIPTION_PRICE_MONTHLY = 9.99;
-const SUBSCRIPTION_PRICE_YEARLY = 100.0;
+const TRIAL_DAYS = 365;
 const OWNER_OPEN_ID = process.env.OWNER_OPEN_ID || "owner-clientcheck";
-const REQUIRE_CC_AT_TRIAL_END = true;
-const CARD_PROMPT_DAYS = 3; // Show card prompt 3 days before trial ends
+const CARD_PROMPT_DAYS = 3;
+
+// ── Core CRUD ─────────────────────────────────────────────────────────────────
+
+export async function getSubscription(userId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db
+    .select()
+    .from(subscriptions)
+    .where(eq(subscriptions.userId, userId))
+    .limit(1);
+  return rows[0] ?? null;
+}
 
 export async function createTrialSubscription(userId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-
   const now = new Date();
   const trialEndsAt = new Date(now.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
-
   const result = await db.insert(subscriptions).values({
     userId,
     status: "trial",
     trialStartedAt: now,
     trialEndsAt,
   });
-
   return result[0].insertId as number;
 }
 
-export async function getSubscription(userId: number) {
-  const db = await getDb();
-  if (!db) return null;
-
-  const rows = await db
-    .select()
-    .from(subscriptions)
-    .where(eq(subscriptions.userId, userId))
-    .limit(1);
-
-  return rows[0] ?? null;
-}
+// ── Upgrade / activate paid plan ──────────────────────────────────────────────
 
 export async function upgradeToSubscription(
   userId: number,
-  planType: "monthly" | "yearly" = "monthly",
-  stripeSubscriptionId?: string | null
+  planType?: "monthly" | "yearly" | string | null,
+  stripeSubscriptionId?: string | null,
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
+  const resolvedPlan = resolvePlanType(planType);
   const now = new Date();
-  const subscriptionEndsAt = new Date(
-    now.getTime() + (planType === "yearly" ? 365 : 30) * 24 * 60 * 60 * 1000
-  );
+  const daysInPlan = resolvedPlan === "customer_monthly" ? 30 : 365;
+  const subscriptionEndsAt = new Date(now.getTime() + daysInPlan * 24 * 60 * 60 * 1000);
+  const amountCents = resolvedPlan === "customer_monthly"
+    ? CUSTOMER_MONTHLY_PRICE_CENTS
+    : CONTRACTOR_ANNUAL_PRICE_CENTS;
 
-  await db
-    .update(subscriptions)
-    .set({
-      status: "active",
-      subscriptionStartedAt: now,
-      subscriptionEndsAt,
-      ...(stripeSubscriptionId != null && { stripeSubscriptionId }),
-    })
-    .where(eq(subscriptions.userId, userId));
+  const existing = await getSubscription(userId);
+  const values = {
+    status: "active" as const,
+    planType: resolvedPlan,
+    subscriptionStartedAt: now,
+    subscriptionEndsAt,
+    nextBillingAmount: String(amountCents / 100) as any,
+    nextBillingDate: subscriptionEndsAt,
+    ...(stripeSubscriptionId != null && { stripeSubscriptionId }),
+  };
 
-  if (stripeSubscriptionId) {
-    console.log(`User ${userId} upgraded to ${planType} plan; Stripe sub ${stripeSubscriptionId}`);
+  if (existing) {
+    await db.update(subscriptions).set(values).where(eq(subscriptions.userId, userId));
+  } else {
+    await db.insert(subscriptions).values({
+      userId,
+      trialStartedAt: now,
+      trialEndsAt: now,
+      ...values,
+    });
   }
 }
+
+/**
+ * Link a Stripe customer + payment method to the user's subscription row.
+ * Called after successful SetupIntent or PaymentIntent.
+ */
+export async function linkStripeCustomer(
+  userId: number,
+  stripeCustomerId: string,
+  stripeDefaultPaymentMethodId?: string | null,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await getSubscription(userId);
+  const now = new Date();
+  const set: Record<string, unknown> = {
+    stripeCustomerId,
+    paymentMethodOnFile: true,
+    ...(stripeDefaultPaymentMethodId && { stripeDefaultPaymentMethodId }),
+  };
+  if (existing) {
+    await db.update(subscriptions).set(set).where(eq(subscriptions.userId, userId));
+  } else {
+    await db.insert(subscriptions).values({
+      userId,
+      status: "trial",
+      trialStartedAt: now,
+      trialEndsAt: now,
+      ...set,
+    } as any);
+  }
+}
+
+/**
+ * Record the Stripe subscription ID + activate the subscription.
+ * Only marks active if stripeSubscriptionId is a real Stripe ID.
+ */
+export async function activateStripeSubscription(
+  userId: number,
+  stripeSubscriptionId: string,
+  planType: BillingPlanType,
+  periodEnd?: Date,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const now = new Date();
+  await db.update(subscriptions).set({
+    status: "active",
+    planType,
+    stripeSubscriptionId,
+    subscriptionStartedAt: now,
+    subscriptionEndsAt: periodEnd ?? new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000),
+  }).where(eq(subscriptions.userId, userId));
+}
+
+// ── Cancel ────────────────────────────────────────────────────────────────────
 
 export async function cancelSubscription(userId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-
-  await db
-    .update(subscriptions)
-    .set({ status: "cancelled" })
-    .where(eq(subscriptions.userId, userId));
+  await db.update(subscriptions).set({ status: "cancelled" }).where(eq(subscriptions.userId, userId));
 }
 
+// ── Status check ──────────────────────────────────────────────────────────────
+
 export async function checkSubscriptionStatus(userId: number, openId: string) {
-  // Owner bypass
   if (openId === OWNER_OPEN_ID) {
     return {
-      isActive: true,
-      isOwner: true,
-      status: "owner",
-      daysRemaining: null,
-      shouldShowCardPrompt: false,
-      shouldSendReminder: false,
+      isActive: true, isOwner: true, status: "owner",
+      daysRemaining: null, shouldShowCardPrompt: false, shouldSendReminder: false,
     };
   }
 
   const sub = await getSubscription(userId);
   if (!sub) {
     return {
-      isActive: false,
-      isOwner: false,
-      status: "no_subscription",
-      daysRemaining: null,
-      shouldShowCardPrompt: false,
-      shouldSendReminder: false,
+      isActive: false, isOwner: false, status: "no_subscription",
+      daysRemaining: null, shouldShowCardPrompt: false, shouldSendReminder: false,
     };
   }
 
   const now = new Date();
 
-  // Check if trial is still active
   if (sub.status === "trial" && sub.trialEndsAt > now) {
-    const daysRemaining = Math.ceil(
-      (sub.trialEndsAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)
-    );
-    const shouldShowCardPrompt = daysRemaining <= CARD_PROMPT_DAYS;
-    const shouldSendReminder = daysRemaining === 3;
+    const daysRemaining = Math.ceil((sub.trialEndsAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
     return {
-      isActive: true,
-      isOwner: false,
-      status: "trial",
-      daysRemaining,
-      shouldShowCardPrompt,
-      shouldSendReminder,
+      isActive: true, isOwner: false, status: "trial", daysRemaining,
+      shouldShowCardPrompt: daysRemaining <= CARD_PROMPT_DAYS,
+      shouldSendReminder: daysRemaining === 3,
     };
   }
 
-  // Check if subscription is active
-  if (
-    sub.status === "active" &&
-    sub.subscriptionEndsAt &&
-    sub.subscriptionEndsAt > now
-  ) {
-    const daysRemaining = Math.ceil(
-      (sub.subscriptionEndsAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)
-    );
+  if (sub.status === "active" && sub.subscriptionEndsAt && sub.subscriptionEndsAt > now) {
+    const daysRemaining = Math.ceil((sub.subscriptionEndsAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
     return {
-      isActive: true,
-      isOwner: false,
-      status: "active",
-      daysRemaining,
-      shouldShowCardPrompt: false,
-      shouldSendReminder: false,
+      isActive: true, isOwner: false, status: "active", daysRemaining,
+      shouldShowCardPrompt: false, shouldSendReminder: false,
     };
   }
 
-  // Subscription expired
   return {
-    isActive: false,
-    isOwner: false,
-    status: "expired",
-    daysRemaining: 0,
-    shouldShowCardPrompt: false,
-    shouldSendReminder: false,
+    isActive: false, isOwner: false, status: "expired", daysRemaining: 0,
+    shouldShowCardPrompt: false, shouldSendReminder: false,
   };
 }
 
-export const SUBSCRIPTION_PRICE = SUBSCRIPTION_PRICE_MONTHLY;
-export const SUBSCRIPTION_PRICE_YEAR = SUBSCRIPTION_PRICE_YEARLY;
+// ── Verified contractor free year ─────────────────────────────────────────────
+
+export async function activateVerifiedFreeYear(
+  userId: number,
+  freeTrialStartAt: Date,
+  freeTrialEndAt: Date,
+  annualPrice: number,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const existing = await getSubscription(userId);
+  const values = {
+    status: "trial" as const,
+    planType: "verified_contractor_free_year" as const,
+    freeTrialStartAt,
+    freeTrialEndAt,
+    trialStartedAt: freeTrialStartAt,
+    trialEndsAt: freeTrialEndAt,
+    nextBillingAmount: String(annualPrice) as any,
+    nextBillingDate: freeTrialEndAt,
+  };
+  if (existing) {
+    await db.update(subscriptions).set(values).where(eq(subscriptions.userId, userId));
+  } else {
+    await db.insert(subscriptions).values({ userId, ...values });
+  }
+}
+
+// ── Reminders ─────────────────────────────────────────────────────────────────
+
+export async function markReminderSent(userId: number) {
+  await markRenewalReminderSent(userId);
+}
+
+export async function markRenewalReminderSent(userId: number, milestone?: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(subscriptions).set({
+    renewalReminderSentAt: new Date(),
+    ...(milestone != null && { lastReminderDaysMilestone: milestone }),
+  }).where(eq(subscriptions.userId, userId));
+}
+
+// ── Exports ───────────────────────────────────────────────────────────────────
+
+export const SUBSCRIPTION_PRICE = 9.99;
+export const SUBSCRIPTION_PRICE_YEAR = 120.0;
 export const TRIAL_DAYS_COUNT = TRIAL_DAYS;
 export const CARD_PROMPT_THRESHOLD = CARD_PROMPT_DAYS;
 
 export function getPricingInfo() {
   return {
-    trial: {
-      days: TRIAL_DAYS,
-      price: 0,
-      requiresCard: false,
-    },
-    monthly: {
-      price: SUBSCRIPTION_PRICE_MONTHLY,
-      currency: "USD",
-      billingCycle: "month",
-    },
-    yearly: {
-      price: SUBSCRIPTION_PRICE_YEARLY,
-      currency: "USD",
-      billingCycle: "year",
-      savings: 19.88,
-      monthlyEquivalent: 8.33,
-      nonRefundable: true,
-    },
+    trial: { days: TRIAL_DAYS, price: 0, requiresCard: false },
+    monthly: { price: 9.99, currency: "USD", billingCycle: "month" },
+    yearly: { price: 100.0, currency: "USD", billingCycle: "year", savings: 19.88, monthlyEquivalent: 8.33, nonRefundable: true },
   };
 }
 
-export async function markCardPromptShown(userId: number) {
-  // Track in local state or separate table in production
-  console.log(`Card prompt shown for user ${userId}`);
-}
+// ── Internal helpers ──────────────────────────────────────────────────────────
 
-export async function markReminderSent(userId: number) {
-  // Track in local state or separate table in production
-  console.log(`Reminder sent for user ${userId}`);
+function resolvePlanType(plan?: string | null): BillingPlanType {
+  if (!plan) return "contractor_annual";
+  if (plan === "monthly" || plan === "customer_monthly") return "customer_monthly";
+  if (plan === "yearly" || plan === "annual_paid" || plan === "contractor_annual") return "contractor_annual";
+  return "contractor_annual";
 }

@@ -8,15 +8,17 @@ import {
   saveRiskScore,
   updateCustomerRiskScore,
 } from "../services/risk-score-engine";
+import { attachSessionAuth, requireUser, requireRole, type AuthenticatedRequest } from "../services/authz";
 
 const router = Router();
+router.use(attachSessionAuth);
 
 /**
  * GET /api/risk-scores/:customerId
  * Get the risk score for a customer
  * Returns cached score or calculates if not available
  */
-router.get("/:customerId", async (req, res) => {
+router.get("/:customerId", requireUser(), async (req: AuthenticatedRequest, res) => {
   try {
     const customerId = parseInt(req.params.customerId);
 
@@ -63,7 +65,7 @@ router.get("/:customerId", async (req, res) => {
  * POST /api/risk-scores/:customerId/recalculate
  * Force recalculation of risk score
  */
-router.post("/:customerId/recalculate", async (req, res) => {
+router.post("/:customerId/recalculate", requireUser(), async (req: AuthenticatedRequest, res) => {
   try {
     const customerId = parseInt(req.params.customerId);
 
@@ -84,7 +86,7 @@ router.post("/:customerId/recalculate", async (req, res) => {
  * Recalculate risk scores for all customers
  * Admin-only endpoint
  */
-router.post("/batch-recalculate", async (req, res) => {
+router.post("/batch-recalculate", requireRole(["admin"]), async (req: AuthenticatedRequest, res) => {
   try {
     const db = await getDb();
     if (!db) return res.status(503).json({ error: "Database not available" });

@@ -7,6 +7,7 @@ import * as Haptics from "expo-haptics";
 import { CancelSubscriptionModal } from "@/components/cancel-subscription-modal";
 import { cancelSubscription } from "@/lib/cancel-subscription-service";
 import { useAuth } from "@/hooks/use-auth";
+import { track } from "@/lib/analytics";
 
 interface PaymentDetails {
   planType: "monthly" | "yearly";
@@ -26,7 +27,10 @@ export default function PaymentSuccessScreen() {
   const [showCancelModal, setShowCancelModal] = useState(false);
 
   useEffect(() => {
-    // Trigger haptic feedback on success
+    const planTypeParam = Array.isArray(params.planType) ? params.planType[0] : params.planType;
+    const planStr = String(planTypeParam ?? "unknown");
+    track("checkout_completed", { plan: planStr });
+    track("payment_successful", { plan: planStr });
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setShowAnimation(true);
 
@@ -50,7 +54,7 @@ export default function PaymentSuccessScreen() {
   }, [params]);
 
   const handleContinue = () => {
-    router.replace("/");
+    router.replace("/legal-acceptance" as never);
   };
 
   const handleViewSubscription = () => {

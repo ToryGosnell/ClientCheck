@@ -1,9 +1,12 @@
-import { View, Text, ScrollView, Pressable, Switch, StyleSheet } from "react-native";
+import { View, Text, ScrollView, Pressable, Switch, StyleSheet, TextInput } from "react-native";
+import Constants from "expo-constants";
 import { useRouter } from "expo-router";
 import { ScreenContainer } from "@/components/screen-container";
 import { useColors } from "@/hooks/use-colors";
 import { useAuth } from "@/hooks/use-auth";
 import { useColorScheme } from "@/hooks/use-color-scheme";
+import { useLocationScope } from "@/hooks/use-location-scope";
+import { LocationScopeBar } from "@/components/location-scope-bar";
 import { useState } from "react";
 import * as SecureStore from "expo-secure-store";
 import { CancelSubscriptionModal } from "@/components/cancel-subscription-modal";
@@ -16,6 +19,9 @@ export default function SettingsScreen() {
   const colorScheme = useColorScheme();
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [darkMode, setDarkMode] = useState(colorScheme === "dark");
+  const { scope, userState, userCity, setScope, setDefaultState, setDefaultCity } = useLocationScope();
+  const [editState, setEditState] = useState(userState ?? "");
+  const [editCity, setEditCity] = useState(userCity ?? "");
 
   const handleToggleDarkMode = async () => {
     setDarkMode(!darkMode);
@@ -117,6 +123,49 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        {/* Location Section */}
+        <View>
+          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Location</Text>
+
+          <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View style={styles.settingRow}>
+              <Text style={[styles.settingLabel, { color: colors.foreground }]}>Default State</Text>
+              <TextInput
+                style={[styles.locInput, { color: colors.foreground, borderColor: colors.border }]}
+                value={editState}
+                onChangeText={setEditState}
+                onBlur={() => { if (editState.trim()) setDefaultState(editState.trim().toUpperCase()); }}
+                placeholder="AZ"
+                placeholderTextColor={colors.muted}
+                maxLength={2}
+                autoCapitalize="characters"
+              />
+            </View>
+
+            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+            <View style={styles.settingRow}>
+              <Text style={[styles.settingLabel, { color: colors.foreground }]}>Default City</Text>
+              <TextInput
+                style={[styles.locInput, { color: colors.foreground, borderColor: colors.border, width: 140 }]}
+                value={editCity}
+                onChangeText={setEditCity}
+                onBlur={() => { if (editCity.trim()) setDefaultCity(editCity.trim()); }}
+                placeholder="Phoenix"
+                placeholderTextColor={colors.muted}
+                autoCapitalize="words"
+              />
+            </View>
+
+            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+            <View style={styles.settingRow}>
+              <Text style={[styles.settingLabel, { color: colors.foreground }]}>Default Search Scope</Text>
+            </View>
+            <LocationScopeBar scope={scope} onScopeChange={setScope} userCity={userCity} userState={userState} compact />
+          </View>
+        </View>
+
         {/* Preferences Section */}
         <View>
           <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Preferences</Text>
@@ -136,7 +185,7 @@ export default function SettingsScreen() {
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
             <Pressable
-              onPress={() => router.push("/privacy-policy")}
+              onPress={() => router.push("/privacy" as never)}
               style={({ pressed }) => [styles.settingRow, pressed && { opacity: 0.6 }]}
             >
               <Text style={[styles.settingLabel, { color: colors.foreground }]}>
@@ -148,11 +197,11 @@ export default function SettingsScreen() {
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
             <Pressable
-              onPress={() => router.push("/privacy-policy")}
+              onPress={() => router.push("/terms" as never)}
               style={({ pressed }) => [styles.settingRow, pressed && { opacity: 0.6 }]}
             >
               <Text style={[styles.settingLabel, { color: colors.foreground }]}>
-                Terms of Service
+                Terms & Conditions
               </Text>
               <Text style={[styles.settingValue, { color: colors.muted }]}>›</Text>
             </Pressable>
@@ -227,6 +276,22 @@ export default function SettingsScreen() {
               <Text style={[styles.settingValue, { color: colors.muted }]}>›</Text>
             </Pressable>
           </View>
+        </View>
+
+        {/* Build / version (support) */}
+        <View style={{ paddingHorizontal: 4, gap: 4 }}>
+          <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: 4 }]}>About</Text>
+          <Text style={{ color: colors.muted, fontSize: 12, lineHeight: 18 }} selectable>
+            App version {Constants.expoConfig?.version ?? "—"}
+            {Constants.nativeBuildVersion != null && Constants.nativeBuildVersion !== ""
+              ? ` · native build ${Constants.nativeBuildVersion}`
+              : ""}
+          </Text>
+          {__DEV__ ? (
+            <Text style={{ color: colors.muted, fontSize: 11, marginTop: 4 }} selectable>
+              Dev-only: native app version {String(Constants.nativeAppVersion ?? "—")}
+            </Text>
+          ) : null}
         </View>
 
         {/* Logout Button */}
@@ -340,5 +405,14 @@ const styles = StyleSheet.create({
   logoutBtnText: {
     fontSize: 16,
     fontWeight: "600",
+  },
+  locInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 15,
+    width: 60,
+    textAlign: "center",
   },
 });

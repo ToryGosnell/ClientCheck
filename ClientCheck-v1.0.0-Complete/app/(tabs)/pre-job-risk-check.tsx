@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
+import { ScreenBackground } from "@/components/screen-background";
 import { useColors } from "@/hooks/use-colors";
 import { cn } from "@/lib/utils";
 
@@ -133,7 +134,8 @@ export default function PreJobRiskCheckScreen() {
   };
 
   return (
-    <ScreenContainer className="p-4">
+    <ScreenBackground backgroundKey="riskCheck">
+    <ScreenContainer className="p-4" containerClassName="bg-transparent">
       <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
         <View className="gap-6">
           {/* Header */}
@@ -179,14 +181,14 @@ export default function PreJobRiskCheckScreen() {
           </View>
 
           {/* Error Message */}
-          {error && (
+          {error ? (
             <View
               className="rounded-lg p-4 border border-error"
               style={{ backgroundColor: colors.error + "20" }}
             >
               <Text className="text-error font-semibold">{error}</Text>
             </View>
-          )}
+          ) : null}
 
           {/* Risk Score Result */}
           {result && (
@@ -440,5 +442,6 @@ export default function PreJobRiskCheckScreen() {
         </View>
       </ScrollView>
     </ScreenContainer>
+    </ScreenBackground>
   );
 }

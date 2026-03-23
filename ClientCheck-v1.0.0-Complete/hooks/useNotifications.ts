@@ -7,13 +7,13 @@ import { trpc } from "@/lib/trpc";
  */
 export function useNotifications() {
   // Get notification history
-  const historyQuery = trpc.notifications.getHistory.useQuery({
+  const historyQuery = trpc.notificationHistory.getHistory.useQuery({
     limit: 50,
   });
 
   const getHistory = useCallback(
-    async (limit: number = 50) => {
-      return historyQuery.refetch({ limit });
+    async () => {
+      return historyQuery.refetch();
     },
     [historyQuery]
   );

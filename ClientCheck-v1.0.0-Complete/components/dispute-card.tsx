@@ -59,7 +59,7 @@ export function DisputeCard({ id, reviewId, status, customerResponse, respondedA
         </Text>
       </View>
 
-      {customerResponse && (
+      {!!customerResponse && (
         <View style={styles.responseSection}>
           <Text style={[styles.responseLabel, { color: colors.foreground }]}>Your Response:</Text>
           <Text style={[styles.responseText, { color: colors.foreground }]} numberOfLines={3}>

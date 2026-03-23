@@ -2,6 +2,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useColors } from "@/hooks/use-colors";
 import { StarRating } from "@/components/star-rating";
 import { RiskBadge } from "@/components/risk-badge";
+import { computeRiskScore } from "@/lib/risk-score";
 import type { Customer } from "@/drizzle/schema";
 import type { RiskLevel } from "@/shared/types";
 
@@ -15,6 +16,7 @@ export function CustomerCard({ customer, onPress, compact = false }: CustomerCar
   const colors = useColors();
   const rating = parseFloat(customer.overallRating ?? "0");
   const initials = `${customer.firstName[0] ?? ""}${customer.lastName[0] ?? ""}`.toUpperCase();
+  const risk = computeRiskScore(customer as any);
 
   const avatarBg =
     customer.riskLevel === "high"
@@ -48,7 +50,7 @@ export function CustomerCard({ customer, onPress, compact = false }: CustomerCar
           {customer.firstName} {customer.lastName}
         </Text>
 
-        {(customer.city || customer.state) && (
+        {!!(customer.city || customer.state) && (
           <Text style={[styles.location, { color: colors.muted }]} numberOfLines={1}>
             📍 {[customer.city, customer.state].filter(Boolean).join(", ")}
           </Text>
@@ -64,11 +66,31 @@ export function CustomerCard({ customer, onPress, compact = false }: CustomerCar
         </View>
 
         {!compact && (
-          <RiskBadge riskLevel={customer.riskLevel as RiskLevel} size="sm" />
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 2 }}>
+            <RiskBadge riskLevel={customer.riskLevel as RiskLevel} size="sm" />
+            {(customer as any).wouldWorkAgainNoCount > 0 && (
+              <View style={{ backgroundColor: "#DC262618", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
+                <Text style={{ color: "#DC2626", fontSize: 11, fontWeight: "600" }}>
+                  {(customer as any).wouldWorkAgainNoCount}x would not work again
+                </Text>
+              </View>
+            )}
+            {(customer as any).criticalRedFlagCount > 0 && (
+              <View style={{ backgroundColor: "#DC262630", borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
+                <Text style={{ color: "#DC2626", fontSize: 11, fontWeight: "800" }}>
+                  {"⚠️ "}{(customer as any).criticalRedFlagCount} critical
+                </Text>
+              </View>
+            )}
+          </View>
         )}
       </View>
 
-      {/* Chevron */}
+      {/* Risk score + chevron */}
+      <View style={{ alignItems: "center", gap: 2 }}>
+        <Text style={{ color: risk.color, fontSize: 18, fontWeight: "900" }}>{risk.score}</Text>
+        <Text style={{ color: colors.muted, fontSize: 9, fontWeight: "600", textTransform: "uppercase" }}>Risk</Text>
+      </View>
       <Text style={[styles.chevron, { color: colors.muted }]}>›</Text>
     </Pressable>
   );

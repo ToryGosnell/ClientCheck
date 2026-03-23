@@ -1,8 +1,17 @@
 /**
- * Customer Subscription Service
- * Manages customer (non-contractor) subscriptions
- * Customers pay $9.99/month or $100/year to participate in the platform
+ * Customer Subscription Service — display constants and utility helpers.
+ *
+ * All mutation operations (create, cancel, reactivate) go through tRPC:
+ * - payments.createCustomerSubscriptionForApp
+ * - subscription.cancelSubscription
+ *
+ * This module provides only pricing constants and pure formatting helpers.
  */
+
+import {
+  CUSTOMER_MONTHLY_PRICE_CENTS,
+  CONTRACTOR_ANNUAL_PRICE_CENTS,
+} from "@/shared/billing-config";
 
 export interface CustomerSubscription {
   id: string;
@@ -18,91 +27,9 @@ export interface CustomerSubscription {
 }
 
 export class CustomerSubscriptionService {
-  static readonly MONTHLY_PRICE = 9.99;
-  static readonly YEARLY_PRICE = 100;
-  static readonly YEARLY_SAVINGS = 17; // percent
-
-  static async createCustomerSubscription(data: {
-    customerId: string;
-    email: string;
-    plan: "monthly" | "yearly";
-    paymentMethodId: string;
-  }): Promise<CustomerSubscription | null> {
-    try {
-      const now = new Date();
-      const currentPeriodEnd = new Date(now);
-
-      if (data.plan === "monthly") {
-        currentPeriodEnd.setMonth(currentPeriodEnd.getMonth() + 1);
-      } else {
-        currentPeriodEnd.setFullYear(currentPeriodEnd.getFullYear() + 1);
-      }
-
-      const subscription: CustomerSubscription = {
-        id: `cust_sub_${Date.now()}`,
-        customerId: data.customerId,
-        email: data.email,
-        status: "active",
-        plan: data.plan,
-        currentPeriodStart: now,
-        currentPeriodEnd,
-      };
-
-      // In production, create Stripe subscription here
-      console.log(`Customer subscription created: ${subscription.id}`);
-
-      return subscription;
-    } catch (error) {
-      console.error("Failed to create customer subscription:", error);
-      return null;
-    }
-  }
-
-  static async getCustomerSubscription(customerId: string): Promise<CustomerSubscription | null> {
-    try {
-      // In production, query database
-      console.log(`Fetching subscription for customer: ${customerId}`);
-      return null;
-    } catch (error) {
-      console.error("Failed to get customer subscription:", error);
-      return null;
-    }
-  }
-
-  static async cancelCustomerSubscription(customerId: string): Promise<boolean> {
-    try {
-      const now = new Date();
-      console.log(`Customer subscription canceled at: ${now.toISOString()}`);
-      return true;
-    } catch (error) {
-      console.error("Failed to cancel customer subscription:", error);
-      return false;
-    }
-  }
-
-  static async reactivateCustomerSubscription(customerId: string): Promise<CustomerSubscription | null> {
-    try {
-      const now = new Date();
-      const currentPeriodEnd = new Date(now);
-      currentPeriodEnd.setMonth(currentPeriodEnd.getMonth() + 1);
-
-      const subscription: CustomerSubscription = {
-        id: `cust_sub_${Date.now()}`,
-        customerId,
-        email: "",
-        status: "active",
-        plan: "monthly",
-        currentPeriodStart: now,
-        currentPeriodEnd,
-      };
-
-      console.log(`Customer subscription reactivated: ${subscription.id}`);
-      return subscription;
-    } catch (error) {
-      console.error("Failed to reactivate customer subscription:", error);
-      return null;
-    }
-  }
+  static readonly MONTHLY_PRICE = CUSTOMER_MONTHLY_PRICE_CENTS / 100;
+  static readonly YEARLY_PRICE = CONTRACTOR_ANNUAL_PRICE_CENTS / 100;
+  static readonly YEARLY_SAVINGS = 17;
 
   static isSubscriptionActive(subscription: CustomerSubscription | null): boolean {
     if (!subscription) return false;
@@ -113,7 +40,7 @@ export class CustomerSubscriptionService {
     if (!subscription) return 0;
     const now = new Date();
     const daysLeft = Math.ceil(
-      (subscription.currentPeriodEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+      (subscription.currentPeriodEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
     );
     return Math.max(0, daysLeft);
   }

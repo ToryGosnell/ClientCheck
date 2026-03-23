@@ -93,7 +93,7 @@ export default function CustomerOnboarding3Screen() {
             </View>
             <View className="flex-row justify-between items-center">
               <Text className="text-sm text-muted">Yearly</Text>
-              <Text className="text-lg font-bold text-foreground">$100/year (17% off)</Text>
+              <Text className="text-lg font-bold text-foreground">$120/year (17% off)</Text>
             </View>
             <Text className="text-xs text-muted mt-2">
               Same price as contractors. Cancel monthly plan anytime.

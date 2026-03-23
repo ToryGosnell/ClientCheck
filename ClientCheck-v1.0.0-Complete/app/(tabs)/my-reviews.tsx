@@ -1,11 +1,12 @@
 import { useRouter } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
+import { ScreenBackground } from "@/components/screen-background";
 import { StarRating } from "@/components/star-rating";
 import { useColors } from "@/hooks/use-colors";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/hooks/use-auth";
-import { parseRedFlags, RED_FLAG_LABELS } from "@/shared/types";
+import { parseFlags, getFlagLabel, isCriticalFlag } from "@/shared/review-flags";
 
 type MyReview = {
   id: number;
@@ -39,7 +40,7 @@ export default function MyReviewsScreen() {
   };
 
   const renderItem = ({ item }: { item: MyReview }) => {
-    const flags = parseRedFlags(item.redFlags);
+    const { redFlags: flags, greenFlags } = parseFlags(item.redFlags);
     const date = new Date(item.createdAt).toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
@@ -48,7 +49,7 @@ export default function MyReviewsScreen() {
 
     return (
       <Pressable
-        onPress={() => router.push(`/customer/${item.customerId}` as never)}
+        onPress={() => router.push(`/customer/${item.customerId}?from=direct` as never)}
         style={({ pressed }) => [
           styles.card,
           { backgroundColor: colors.surface, borderColor: colors.border },
@@ -65,7 +66,7 @@ export default function MyReviewsScreen() {
             <Text style={[styles.customerName, { color: colors.foreground }]}>
               {item.customerFirstName} {item.customerLastName}
             </Text>
-            {(item.customerCity || item.customerState) && (
+            {!!(item.customerCity || item.customerState) && (
               <Text style={[styles.location, { color: colors.muted }]}>
                 📍 {[item.customerCity, item.customerState].filter(Boolean).join(", ")}
               </Text>
@@ -74,7 +75,7 @@ export default function MyReviewsScreen() {
           </View>
           <View style={styles.cardMeta}>
             <Text style={[styles.date, { color: colors.muted }]}>{date}</Text>
-            {item.jobType && (
+            {!!item.jobType && (
               <Text style={[styles.jobTag, { backgroundColor: colors.primary + "18", color: colors.primary }]}>
                 {item.jobType}
               </Text>
@@ -82,7 +83,7 @@ export default function MyReviewsScreen() {
           </View>
         </View>
 
-        {item.reviewText && (
+        {!!item.reviewText && (
           <Text style={[styles.reviewText, { color: colors.foreground }]} numberOfLines={2}>
             "{item.reviewText}"
           </Text>
@@ -90,13 +91,34 @@ export default function MyReviewsScreen() {
 
         {flags.length > 0 && (
           <View style={styles.flagsRow}>
-            {flags.slice(0, 2).map((f) => (
-              <View key={f} style={[styles.flagChip, { backgroundColor: colors.error + "18", borderColor: colors.error + "44" }]}>
-                <Text style={[styles.flagText, { color: colors.error }]}>🚩 {RED_FLAG_LABELS[f]}</Text>
-              </View>
-            ))}
+            {flags.slice(0, 2).map((f) => {
+              const crit = isCriticalFlag(f);
+              return (
+                <View key={f} style={[styles.flagChip, {
+                  backgroundColor: crit ? "#DC262630" : colors.error + "18",
+                  borderColor: crit ? "#DC2626" : colors.error + "44",
+                  borderWidth: crit ? 2 : 1,
+                }]}>
+                  <Text style={[styles.flagText, { color: colors.error, fontWeight: crit ? "800" : "600" }]}>
+                    {crit ? "⚠️ " : "🚩 "}{getFlagLabel(f)}
+                  </Text>
+                </View>
+              );
+            })}
             {flags.length > 2 && (
               <Text style={[styles.moreFlagsText, { color: colors.muted }]}>+{flags.length - 2} more</Text>
+            )}
+          </View>
+        )}
+        {greenFlags.length > 0 && (
+          <View style={styles.flagsRow}>
+            {greenFlags.slice(0, 2).map((f) => (
+              <View key={f} style={[styles.flagChip, { backgroundColor: "#22C55E18", borderColor: "#22C55E44" }]}>
+                <Text style={[styles.flagText, { color: "#22C55E" }]}>{"✅ "}{getFlagLabel(f)}</Text>
+              </View>
+            ))}
+            {greenFlags.length > 2 && (
+              <Text style={[styles.moreFlagsText, { color: colors.muted }]}>+{greenFlags.length - 2} more</Text>
             )}
           </View>
         )}
@@ -117,7 +139,8 @@ export default function MyReviewsScreen() {
   };
 
   return (
-    <ScreenContainer edges={["top", "left", "right"]}>
+    <ScreenBackground backgroundKey="myReviews">
+    <ScreenContainer edges={["top", "left", "right"]} containerClassName="bg-transparent">
       <View style={[styles.titleBar, { borderBottomColor: colors.border }]}>
         <Text style={[styles.title, { color: colors.foreground }]}>My Reviews</Text>
         <Text style={[styles.subtitle, { color: colors.muted }]}>
@@ -143,19 +166,21 @@ export default function MyReviewsScreen() {
       ) : (
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyEmoji}>📝</Text>
-          <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No Reviews Yet</Text>
+          <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No reviews yet</Text>
           <Text style={[styles.emptyDesc, { color: colors.muted }]}>
-            You haven't reviewed any customers yet. After completing a job, add a review to help other contractors vet this client.
+            Search a customer to get started, open their customer profile, then tap Submit a review after a job. You can also
+            start from the button below if you already know who you’re reviewing.
           </Text>
           <Pressable
             onPress={() => router.push("/add-review" as never)}
             style={[styles.addBtn, { backgroundColor: colors.primary }]}
           >
-            <Text style={styles.addBtnText}>Add Your First Review</Text>
+            <Text style={styles.addBtnText}>Submit a review</Text>
           </Pressable>
         </View>
       )}
     </ScreenContainer>
+    </ScreenBackground>
   );
 }
 

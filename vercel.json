@@ -1,0 +1,5 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "outputDirectory": "ClientCheck-v1.0.0-Complete/dist",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}

@@ -3,18 +3,15 @@ import { useColors } from "@/hooks/use-colors";
 
 interface RatingBreakdownProps {
   reviewCount: number;
-  // Star counts from 5 down to 1
   distribution?: number[];
 }
 
 export function RatingBreakdown({ reviewCount, distribution }: RatingBreakdownProps) {
   const colors = useColors();
-
-  // Default to empty distribution
   const dist = distribution ?? [0, 0, 0, 0, 0];
 
   return (
-    <View style={styles.container}>
+    <View style={s.container}>
       {[5, 4, 3, 2, 1].map((star, i) => {
         const count = dist[i] ?? 0;
         const pct = reviewCount > 0 ? (count / reviewCount) * 100 : 0;
@@ -22,17 +19,18 @@ export function RatingBreakdown({ reviewCount, distribution }: RatingBreakdownPr
           star >= 4 ? colors.success : star === 3 ? colors.warning : colors.error;
 
         return (
-          <View key={star} style={styles.row}>
-            <Text style={[styles.starLabel, { color: colors.muted }]}>{star}★</Text>
-            <View style={[styles.barBg, { backgroundColor: colors.border }]}>
+          <View key={star} style={s.row}>
+            <Text style={[s.starLabel, { color: colors.foreground }]}>{star}</Text>
+            <Text style={[s.starIcon, { color: barColor }]}>★</Text>
+            <View style={[s.barBg, { backgroundColor: "rgba(255,255,255,0.06)" }]}>
               <View
                 style={[
-                  styles.barFill,
+                  s.barFill,
                   { width: `${pct}%` as `${number}%`, backgroundColor: barColor },
                 ]}
               />
             </View>
-            <Text style={[styles.count, { color: colors.muted }]}>{count}</Text>
+            <Text style={[s.count, { color: colors.muted }]}>{count}</Text>
           </View>
         );
       })}
@@ -40,33 +38,12 @@ export function RatingBreakdown({ reviewCount, distribution }: RatingBreakdownPr
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    gap: 6,
-  },
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  starLabel: {
-    width: 24,
-    fontSize: 12,
-    textAlign: "right",
-  },
-  barBg: {
-    flex: 1,
-    height: 8,
-    borderRadius: 4,
-    overflow: "hidden",
-  },
-  barFill: {
-    height: "100%",
-    borderRadius: 4,
-  },
-  count: {
-    width: 24,
-    fontSize: 12,
-    textAlign: "left",
-  },
+const s = StyleSheet.create({
+  container: { gap: 10 },
+  row: { flexDirection: "row", alignItems: "center", gap: 6 },
+  starLabel: { width: 12, fontSize: 13, fontWeight: "700", textAlign: "right" },
+  starIcon: { fontSize: 13, width: 16, textAlign: "center" },
+  barBg: { flex: 1, height: 10, borderRadius: 5, overflow: "hidden" },
+  barFill: { height: "100%", borderRadius: 5 },
+  count: { width: 26, fontSize: 12, fontWeight: "600", textAlign: "right" },
 });

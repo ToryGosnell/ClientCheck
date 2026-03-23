@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/use-colors";
 import { ScreenContainer } from "@/components/screen-container";
+import { ScreenBackground } from "@/components/screen-background";
 import { trpc } from "@/lib/trpc";
 
 interface SearchResult {
@@ -53,7 +54,7 @@ export default function AdvancedSearchScreen() {
   }, [searchQuery.data, name, state, zip, phone]);
 
   const handleSelectCustomer = (customerId: number) => {
-    router.push(`/customer/${customerId}`);
+    router.push(`/customer/${customerId}?from=search` as never);
   };
 
   const renderCustomerCard = ({ item }: { item: SearchResult }) => (
@@ -76,12 +77,12 @@ export default function AdvancedSearchScreen() {
       </View>
 
       <View style={styles.cardDetails}>
-        {item.phone && (
+        {!!item.phone && (
           <Text style={[styles.detailText, { color: colors.muted }]}>
             📱 {item.phone}
           </Text>
         )}
-        {(item.city || item.state || item.zip) && (
+        {!!(item.city || item.state || item.zip) && (
           <Text style={[styles.detailText, { color: colors.muted }]}>
             📍 {[item.city, item.state, item.zip].filter(Boolean).join(", ")}
           </Text>
@@ -94,7 +95,8 @@ export default function AdvancedSearchScreen() {
   );
 
   return (
-    <ScreenContainer>
+    <ScreenBackground backgroundKey="search">
+    <ScreenContainer containerClassName="bg-transparent">
       <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <Text style={[styles.title, { color: colors.foreground }]}>Search Customers</Text>
@@ -222,6 +224,7 @@ export default function AdvancedSearchScreen() {
         </View>
       </ScrollView>
     </ScreenContainer>
+    </ScreenBackground>
   );
 }
 

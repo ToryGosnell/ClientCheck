@@ -1,8 +1,7 @@
 import React, { useState } from "react";
 import { View, Text, Pressable, ScrollView } from "react-native";
 import { StarRating } from "./star-rating";
-// Using inline red flag chips instead of RedFlagChips component
-import { RED_FLAGS, type RedFlag } from "@/shared/types";
+import { RED_FLAGS, type WeightedFlag } from "@/shared/review-flags";
 import { useColors } from "@/hooks/use-colors";
 
 interface QuickRateModeProps {
@@ -10,7 +9,7 @@ interface QuickRateModeProps {
     overallRating: number;
     wouldWorkAgain: number;
     paymentReliability: number;
-    selectedRedFlags: RedFlag[];
+    selectedRedFlags: string[];
   }) => void;
   onCancel: () => void;
 }
@@ -21,9 +20,9 @@ export function QuickRateMode({ onComplete, onCancel }: QuickRateModeProps) {
   const [overallRating, setOverallRating] = useState(0);
   const [wouldWorkAgain, setWouldWorkAgain] = useState(0);
   const [paymentReliability, setPaymentReliability] = useState(0);
-  const [selectedRedFlags, setSelectedRedFlags] = useState<RedFlag[]>([]);
+  const [selectedRedFlags, setSelectedRedFlags] = useState<string[]>([]);
 
-  const handleRedFlagToggle = (flag: RedFlag) => {
+  const handleRedFlagToggle = (flag: string) => {
     setSelectedRedFlags((prev) =>
       prev.includes(flag) ? prev.filter((f) => f !== flag) : [...prev, flag]
     );
@@ -148,22 +147,22 @@ export function QuickRateMode({ onComplete, onCancel }: QuickRateModeProps) {
             <View className="flex-row flex-wrap gap-2">
               {RED_FLAGS.map((flag) => (
                 <Pressable
-                  key={flag}
-                  onPress={() => handleRedFlagToggle(flag)}
+                  key={flag.value}
+                  onPress={() => handleRedFlagToggle(flag.value)}
                   className={`px-3 py-2 rounded-full border ${
-                    selectedRedFlags.includes(flag)
+                    selectedRedFlags.includes(flag.value)
                       ? "bg-error border-error"
                       : "bg-surface border-border"
                   }`}
                 >
                   <Text
                     className={`text-sm font-medium ${
-                      selectedRedFlags.includes(flag)
+                      selectedRedFlags.includes(flag.value)
                         ? "text-background"
                         : "text-foreground"
                     }`}
                   >
-                    {flag.replace(/_/g, " ")}
+                    {flag.label}
                   </Text>
                 </Pressable>
               ))}

@@ -1,138 +1,145 @@
-import React, { useEffect } from "react";
-import { ScrollView, View, Text, Pressable } from "react-native";
+import { useEffect, useRef } from "react";
+import { ScrollView, View, Text, Pressable, ActivityIndicator } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
+import { useColors } from "@/hooks/use-colors";
+import { trpc } from "@/lib/trpc";
 import * as Haptics from "expo-haptics";
+import { getPlanDisplayName, getPlanPrice } from "@/shared/billing-config";
+import { track } from "@/lib/analytics";
 
 export default function CustomerPaymentSuccessScreen() {
   const router = useRouter();
+  const colors = useColors();
+  const params = useLocalSearchParams<{ plan?: string; paymentIntentId?: string }>();
+
+  const { data: subStatus, isLoading } = trpc.subscription.getStatus.useQuery();
+
+  const verification = params.paymentIntentId
+    ? trpc.payments.verifyPayment.useQuery({ paymentIntentId: params.paymentIntentId })
+    : null;
+
+  const paymentVerified = verification?.data?.success ?? subStatus?.isActive ?? false;
+  const paymentTracked = useRef(false);
 
   useEffect(() => {
-    // Haptic feedback on success
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  }, []);
+    if (paymentVerified) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      if (!paymentTracked.current) {
+        paymentTracked.current = true;
+        track("payment_successful", { plan: params.plan });
+      }
+    }
+  }, [paymentVerified, params.plan]);
 
-  const handlePress = async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
+  const planLabel = params.plan === "yearly" ? "Annual ($120.00/year)" : "Monthly ($9.99/month)";
+  const renewDate = subStatus?.daysRemaining
+    ? new Date(Date.now() + (subStatus.daysRemaining ?? 30) * 86400000).toLocaleDateString("en-US", {
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+      })
+    : null;
 
   return (
     <ScreenContainer>
-      <ScrollView contentContainerStyle={{ flexGrow: 1 }} className="flex-1">
-        <View className="flex-1 gap-6 px-6 py-8 items-center justify-center">
-          {/* Success Icon */}
-          <View className="w-20 h-20 bg-green-600/20 rounded-full items-center justify-center">
-            <Text className="text-5xl">✓</Text>
-          </View>
+      <ScrollView contentContainerStyle={{ flexGrow: 1 }} showsVerticalScrollIndicator={false}>
+        <View style={{ flex: 1, gap: 24, paddingHorizontal: 24, paddingVertical: 32, alignItems: "center", justifyContent: "center" }}>
 
-          {/* Success Message */}
-          <View className="gap-2 items-center">
-            <Text className="text-3xl font-bold text-foreground">Welcome!</Text>
-            <Text className="text-base text-muted text-center">
-              Your subscription is now active. You're part of the fair review community.
-            </Text>
-          </View>
+          {isLoading ? (
+            <ActivityIndicator size="large" color={colors.primary} />
+          ) : paymentVerified ? (
+            <>
+              <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: "rgba(34,197,94,0.15)", alignItems: "center", justifyContent: "center" }}>
+                <Text style={{ fontSize: 48, color: "#22c55e" }}>✓</Text>
+              </View>
+
+              <View style={{ gap: 8, alignItems: "center" }}>
+                <Text style={{ fontSize: 28, fontWeight: "800", color: colors.foreground }}>Welcome!</Text>
+                <Text style={{ fontSize: 15, color: colors.muted, textAlign: "center", lineHeight: 22 }}>
+                  Your subscription is now active. You're part of the fair review community.
+                </Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: "rgba(239,68,68,0.15)", alignItems: "center", justifyContent: "center" }}>
+                <Text style={{ fontSize: 48 }}>!</Text>
+              </View>
+
+              <View style={{ gap: 8, alignItems: "center" }}>
+                <Text style={{ fontSize: 28, fontWeight: "800", color: colors.foreground }}>Payment Pending</Text>
+                <Text style={{ fontSize: 15, color: colors.muted, textAlign: "center", lineHeight: 22 }}>
+                  We haven't confirmed your payment yet. If you just completed payment, it may take a moment to process.
+                </Text>
+              </View>
+            </>
+          )}
 
           {/* What's Included */}
-          <View className="w-full bg-surface border border-border rounded-xl p-4 gap-3">
-            <Text className="font-bold text-foreground">You Now Have Access To:</Text>
-            <View className="gap-2">
-              <View className="flex-row gap-3">
-                <Text className="text-lg">👁️</Text>
-                <Text className="flex-1 text-sm text-muted">
-                  View all contractor reviews and ratings
-                </Text>
+          <View style={{ width: "100%", backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 16, gap: 12 }}>
+            <Text style={{ fontWeight: "700", color: colors.foreground }}>You Now Have Access To:</Text>
+            {[
+              { icon: "👁️", text: "View all contractor reviews and ratings" },
+              { icon: "💬", text: "Respond to reviews about your business" },
+              { icon: "⚖️", text: "File disputes with evidence and photos" },
+              { icon: "📊", text: "Track your reputation score and trends" },
+            ].map((item) => (
+              <View key={item.icon} style={{ flexDirection: "row", gap: 12 }}>
+                <Text style={{ fontSize: 18 }}>{item.icon}</Text>
+                <Text style={{ flex: 1, fontSize: 14, color: colors.muted }}>{item.text}</Text>
               </View>
-              <View className="flex-row gap-3">
-                <Text className="text-lg">💬</Text>
-                <Text className="flex-1 text-sm text-muted">
-                  Respond to reviews about your business
-                </Text>
-              </View>
-              <View className="flex-row gap-3">
-                <Text className="text-lg">⚖️</Text>
-                <Text className="flex-1 text-sm text-muted">
-                  File disputes with evidence and photos
-                </Text>
-              </View>
-              <View className="flex-row gap-3">
-                <Text className="text-lg">📊</Text>
-                <Text className="flex-1 text-sm text-muted">
-                  Track your reputation score and trends
-                </Text>
-              </View>
-              <View className="flex-row gap-3">
-                <Text className="text-lg">🎯</Text>
-                <Text className="flex-1 text-sm text-muted">
-                  Priority support from our team
-                </Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Fair Reviews Commitment */}
-          <View className="w-full bg-blue-900/20 border border-blue-600/30 rounded-lg p-4 gap-2">
-            <Text className="font-bold text-blue-300">Our Commitment to Fair Reviews</Text>
-            <Text className="text-xs text-muted leading-relaxed">
-              By paying equally with contractors, you're ensuring that both sides have skin in the
-              game. This prevents fake reviews, frivolous disputes, and creates a trusted community
-              where honest feedback matters. Your payment directly funds independent moderation and
-              fair dispute resolution.
-            </Text>
+            ))}
           </View>
 
           {/* Action Buttons */}
-          <View className="w-full gap-3">
+          <View style={{ width: "100%", gap: 12 }}>
             <Pressable
-              onPress={() => {
-                handlePress();
-                router.push("/(tabs)");
-              }}
+              onPress={() => router.push("/legal-acceptance" as never)}
               style={({ pressed }) => [
-                {
-                  opacity: pressed ? 0.8 : 1,
-                  transform: [{ scale: pressed ? 0.97 : 1 }],
-                },
+                { backgroundColor: colors.primary, borderRadius: 12, paddingVertical: 16, alignItems: "center" },
+                pressed && { opacity: 0.85 },
               ]}
-              className="bg-primary rounded-lg py-4 items-center"
             >
-              <Text className="text-white font-bold text-lg">Continue to App</Text>
+              <Text style={{ color: "#fff", fontWeight: "700", fontSize: 17 }}>Continue</Text>
             </Pressable>
 
             <Pressable
-              onPress={() => {
-                handlePress();
-                router.push("/subscription");
-              }}
-              style={({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }]}
-              className="border border-border rounded-lg py-4 items-center"
+              onPress={() => router.push("/subscription")}
+              style={({ pressed }) => [
+                { borderWidth: 1, borderColor: colors.border, borderRadius: 12, paddingVertical: 16, alignItems: "center" },
+                pressed && { opacity: 0.7 },
+              ]}
             >
-              <Text className="text-foreground font-semibold">Manage Subscription</Text>
+              <Text style={{ color: colors.foreground, fontWeight: "600" }}>Manage Subscription</Text>
             </Pressable>
           </View>
 
           {/* Subscription Details */}
-          <View className="w-full bg-surface rounded-lg p-4 gap-2">
-            <Text className="text-xs font-semibold text-muted">SUBSCRIPTION DETAILS</Text>
-            <View className="flex-row justify-between">
-              <Text className="text-sm text-muted">Plan:</Text>
-              <Text className="text-sm font-semibold text-foreground">Monthly ($9.99)</Text>
+          <View style={{ width: "100%", backgroundColor: colors.surface, borderRadius: 12, padding: 16, gap: 8 }}>
+            <Text style={{ fontSize: 11, fontWeight: "600", color: colors.muted, letterSpacing: 0.5 }}>SUBSCRIPTION DETAILS</Text>
+            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+              <Text style={{ fontSize: 14, color: colors.muted }}>Plan:</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: colors.foreground }}>{planLabel}</Text>
             </View>
-            <View className="flex-row justify-between">
-              <Text className="text-sm text-muted">Renews:</Text>
-              <Text className="text-sm font-semibold text-foreground">April 13, 2026</Text>
-            </View>
-            <View className="flex-row justify-between">
-              <Text className="text-sm text-muted">Status:</Text>
-              <Text className="text-sm font-semibold text-green-500">Active</Text>
+            {!!renewDate && (
+              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                <Text style={{ fontSize: 14, color: colors.muted }}>Renews:</Text>
+                <Text style={{ fontSize: 14, fontWeight: "600", color: colors.foreground }}>{renewDate}</Text>
+              </View>
+            )}
+            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+              <Text style={{ fontSize: 14, color: colors.muted }}>Status:</Text>
+              <Text style={{ fontSize: 14, fontWeight: "600", color: paymentVerified ? "#22c55e" : "#f59e0b" }}>
+                {paymentVerified ? "Active" : "Pending"}
+              </Text>
             </View>
           </View>
 
-          {/* Support */}
-          <View className="items-center gap-1">
-            <Text className="text-xs text-muted">Questions?</Text>
-            <Pressable onPress={() => router.push("/contact-support")}>
-              <Text className="text-sm text-primary font-semibold">Contact Support</Text>
+          <View style={{ alignItems: "center", gap: 4 }}>
+            <Text style={{ fontSize: 11, color: colors.muted }}>Questions?</Text>
+            <Pressable onPress={() => router.push("/contact-support" as never)}>
+              <Text style={{ fontSize: 14, color: colors.primary, fontWeight: "600" }}>Contact Support</Text>
             </Pressable>
           </View>
         </View>

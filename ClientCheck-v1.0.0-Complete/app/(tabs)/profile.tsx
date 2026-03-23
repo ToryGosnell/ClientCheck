@@ -11,12 +11,19 @@ import {
   View,
 } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
+import { ScreenBackground } from "@/components/screen-background";
 import { useColors } from "@/hooks/use-colors";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/hooks/use-auth";
 import { useColorScheme } from "@/hooks/use-color-scheme";
 import { useRouter } from "expo-router";
 import { TRADE_TYPES } from "@/shared/types";
+import {
+  getMembershipDisplayState,
+  getVerificationBadge,
+  validateContractorLicenseNumber,
+  PRICING_COPY,
+} from "@/shared/membership";
 
 export default function ProfileScreen() {
   const colors = useColors();
@@ -35,6 +42,25 @@ export default function ProfileScreen() {
     },
   });
 
+  const { data: membership, refetch: refetchMembership } = trpc.subscription.getMembership.useQuery(
+    undefined,
+    { enabled: isAuthenticated }
+  );
+  const submitLicenseMutation = trpc.verification.submitLicenseNumber.useMutation({
+    onSuccess: () => {
+      refetch();
+      refetchMembership();
+      setLicenseSubmitField("");
+      Alert.alert("Submitted", "Your license number is being reviewed.");
+    },
+  });
+  const activateFreeYearMutation = trpc.subscription.activateFreeYear.useMutation({
+    onSuccess: () => {
+      refetchMembership();
+      Alert.alert("Activated", "Your 12-month free membership is now active.");
+    },
+  });
+
   const [editing, setEditing] = useState(false);
   const [trade, setTrade] = useState("");
   const [company, setCompany] = useState("");
@@ -43,6 +69,21 @@ export default function ProfileScreen() {
   const [state, setState] = useState("");
   const [bio, setBio] = useState("");
   const [showTradePicker, setShowTradePicker] = useState(false);
+  const [licenseSubmitField, setLicenseSubmitField] = useState("");
+  const [licenseError, setLicenseError] = useState("");
+
+  const membershipDisplay = membership ? getMembershipDisplayState(membership) : null;
+  const verificationBadge = getVerificationBadge(membership?.verificationStatus);
+
+  const handleSubmitLicense = () => {
+    const validation = validateContractorLicenseNumber(licenseSubmitField);
+    if (!validation.valid) {
+      setLicenseError(validation.error ?? "Invalid license number");
+      return;
+    }
+    setLicenseError("");
+    submitLicenseMutation.mutate({ licenseNumber: licenseSubmitField.trim() });
+  };
 
   const startEditing = () => {
     setTrade(profile?.trade ?? "");
@@ -81,7 +122,8 @@ export default function ProfileScreen() {
   }
 
   return (
-    <ScreenContainer edges={["top", "left", "right"]}>
+    <ScreenBackground backgroundKey="profile">
+    <ScreenContainer edges={["top", "left", "right"]} containerClassName="bg-transparent">
       <View style={[styles.titleBar, { borderBottomColor: colors.border }]}>
         <Text style={[styles.title, { color: colors.foreground }]}>Profile</Text>
         {!editing && (
@@ -241,25 +283,25 @@ export default function ProfileScreen() {
             <View style={styles.profileDisplay}>
               {profile ? (
                 <>
-                  {profile.trade && (
+                  {!!profile.trade && (
                     <View style={styles.profileRow}>
                       <Text style={[styles.profileLabel, { color: colors.muted }]}>Trade</Text>
                       <Text style={[styles.profileValue, { color: colors.foreground }]}>{profile.trade}</Text>
                     </View>
                   )}
-                  {profile.company && (
+                  {!!profile.company && (
                     <View style={styles.profileRow}>
                       <Text style={[styles.profileLabel, { color: colors.muted }]}>Company</Text>
                       <Text style={[styles.profileValue, { color: colors.foreground }]}>{profile.company}</Text>
                     </View>
                   )}
-                  {profile.licenseNumber && (
+                  {!!profile.licenseNumber && (
                     <View style={styles.profileRow}>
                       <Text style={[styles.profileLabel, { color: colors.muted }]}>License #</Text>
                       <Text style={[styles.profileValue, { color: colors.foreground }]}>{profile.licenseNumber}</Text>
                     </View>
                   )}
-                  {(profile.city || profile.state) && (
+                  {!!(profile.city || profile.state) && (
                     <View style={styles.profileRow}>
                       <Text style={[styles.profileLabel, { color: colors.muted }]}>Location</Text>
                       <Text style={[styles.profileValue, { color: colors.foreground }]}>
@@ -267,7 +309,7 @@ export default function ProfileScreen() {
                       </Text>
                     </View>
                   )}
-                  {profile.bio && (
+                  {!!profile.bio && (
                     <View style={styles.profileRow}>
                       <Text style={[styles.profileLabel, { color: colors.muted }]}>Bio</Text>
                       <Text style={[styles.profileValue, { color: colors.foreground }]}>{profile.bio}</Text>
@@ -299,14 +341,125 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Subscription */}
+        {/* Membership & Verification */}
         <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Subscription</Text>
+          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Membership</Text>
+
+          {/* Verification badge */}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <View style={{ backgroundColor: verificationBadge.bgColor, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 }}>
+              <Text style={{ color: verificationBadge.color, fontSize: 13, fontWeight: "600" }}>
+                {verificationBadge.label}
+              </Text>
+            </View>
+            {!!membership?.contractorLicenseNumber && (
+              <Text style={{ color: colors.muted, fontSize: 12 }}>
+                License: {membership.contractorLicenseNumber}
+              </Text>
+            )}
+          </View>
+
+          {/* Membership status */}
+          {membershipDisplay ? (
+            <View style={{ gap: 6, marginBottom: 12 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Text style={{ fontSize: 20 }}>{membershipDisplay.statusEmoji}</Text>
+                <Text style={{ color: colors.foreground, fontSize: 15, fontWeight: "600", flex: 1 }}>
+                  {membershipDisplay.headline}
+                </Text>
+              </View>
+              <Text style={{ color: colors.muted, fontSize: 13, lineHeight: 18 }}>
+                {membershipDisplay.description}
+              </Text>
+              {!!membershipDisplay.expiresAt && (
+                <Text style={{ color: colors.muted, fontSize: 12 }}>
+                  Expires: {membershipDisplay.expiresAt}
+                </Text>
+              )}
+              {membershipDisplay.showRenewalReminder && !!membershipDisplay.renewalReminderText && (
+                <View style={{ backgroundColor: "#f59e0b18", borderRadius: 8, padding: 10, marginTop: 4 }}>
+                  <Text style={{ color: "#f59e0b", fontSize: 13, lineHeight: 18 }}>
+                    {membershipDisplay.renewalReminderText}
+                  </Text>
+                </View>
+              )}
+              {membershipDisplay.showAddPayment && (
+                <Pressable
+                  onPress={() => router.push("/subscription")}
+                  style={({ pressed }) => [
+                    { backgroundColor: colors.primary, borderRadius: 8, paddingVertical: 10, alignItems: "center", marginTop: 6 },
+                    pressed && { opacity: 0.8 },
+                  ]}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "600", fontSize: 14 }}>Add Payment Method</Text>
+                </Pressable>
+              )}
+            </View>
+          ) : null}
+
+          {/* License submission (only show if not yet submitted) */}
+          {membership?.verificationStatus === "not_submitted" || membership?.verificationStatus === "rejected" ? (
+            <View style={{ gap: 8, paddingTop: 8, borderTopWidth: 0.5, borderTopColor: colors.border }}>
+              <Text style={{ color: colors.foreground, fontSize: 14, fontWeight: "600" }}>
+                Submit Contractor License
+              </Text>
+              <Text style={{ color: colors.muted, fontSize: 12, lineHeight: 17 }}>
+                {PRICING_COPY.freeOffer}. {PRICING_COPY.licenseRequired}.
+              </Text>
+              <TextInput
+                value={licenseSubmitField}
+                onChangeText={setLicenseSubmitField}
+                placeholder="e.g. CSLB-1045678"
+                placeholderTextColor={colors.muted}
+                style={[styles.input, { backgroundColor: colors.background, borderColor: colors.border, color: colors.foreground }]}
+              />
+              {!!licenseError && (
+                <Text style={{ color: colors.error, fontSize: 12 }}>{licenseError}</Text>
+              )}
+              <Pressable
+                onPress={handleSubmitLicense}
+                disabled={submitLicenseMutation.isPending}
+                style={({ pressed }) => [
+                  { backgroundColor: colors.primary, borderRadius: 8, paddingVertical: 10, alignItems: "center" },
+                  pressed && { opacity: 0.8 },
+                ]}
+              >
+                <Text style={{ color: "#fff", fontWeight: "600", fontSize: 14 }}>
+                  {submitLicenseMutation.isPending ? "Submitting..." : "Submit for Verification"}
+                </Text>
+              </Pressable>
+              <Text style={{ color: colors.muted, fontSize: 11, lineHeight: 15 }}>
+                {PRICING_COPY.afterFree}. {PRICING_COPY.reminderNotice}.
+              </Text>
+            </View>
+          ) : null}
+
+          {/* Activate free year if verified but not yet activated */}
+          {membership?.verificationStatus === "verified" && membership?.planType === "none" ? (
+            <View style={{ gap: 8, paddingTop: 8, borderTopWidth: 0.5, borderTopColor: colors.border }}>
+              <Text style={{ color: colors.foreground, fontSize: 14, fontWeight: "600" }}>
+                Activate Your Free 12 Months
+              </Text>
+              <Pressable
+                onPress={() => activateFreeYearMutation.mutate()}
+                disabled={activateFreeYearMutation.isPending}
+                style={({ pressed }) => [
+                  { backgroundColor: "#16a34a", borderRadius: 8, paddingVertical: 12, alignItems: "center" },
+                  pressed && { opacity: 0.8 },
+                ]}
+              >
+                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 15 }}>
+                  {activateFreeYearMutation.isPending ? "Activating..." : "Activate Free Year"}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+
           <Pressable
             onPress={() => router.push("/subscription")}
             style={({ pressed }) => [
               styles.linkRow,
-              { borderBottomColor: colors.border },
+              { borderBottomColor: colors.border, marginTop: 8 },
               pressed && { opacity: 0.6 },
             ]}
           >
@@ -337,7 +490,7 @@ export default function ProfileScreen() {
             <Text style={[styles.linkArrow, { color: colors.muted }]}>›</Text>
           </Pressable>
           <Pressable
-            onPress={() => router.push("/privacy-policy")}
+            onPress={() => router.push("/privacy" as never)}
             style={({ pressed }) => [
               styles.linkRow,
               { borderTopColor: colors.border, borderTopWidth: 0.5 },
@@ -348,14 +501,14 @@ export default function ProfileScreen() {
             <Text style={[styles.linkArrow, { color: colors.muted }]}>›</Text>
           </Pressable>
           <Pressable
-            onPress={() => router.push("/terms-of-service")}
+            onPress={() => router.push("/terms" as never)}
             style={({ pressed }) => [
               styles.linkRow,
               { borderTopColor: colors.border, borderTopWidth: 0.5 },
               pressed && { opacity: 0.6 },
             ]}
           >
-            <Text style={[styles.linkLabel, { color: colors.foreground }]}>Terms of Service</Text>
+            <Text style={[styles.linkLabel, { color: colors.foreground }]}>Terms & Conditions</Text>
             <Text style={[styles.linkArrow, { color: colors.muted }]}>›</Text>
           </Pressable>
           <Pressable
@@ -384,6 +537,7 @@ export default function ProfileScreen() {
         </Pressable>
       </ScrollView>
     </ScreenContainer>
+    </ScreenBackground>
   );
 }
 

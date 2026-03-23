@@ -1,5 +1,5 @@
 import { useRouter, useLocalSearchParams } from "expo-router";
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -14,51 +14,34 @@ import {
   View,
 } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
+import { ScreenBackground } from "@/components/screen-background";
 import { StarRating } from "@/components/star-rating";
 import { CategoryRating } from "@/components/category-rating";
-import { RedFlagChips } from "@/components/red-flag-chip";
+import { FlagChipsSection } from "@/components/red-flag-chip";
 import { LegalDisclaimerModal } from "@/components/legal-disclaimer-modal";
 import { useColors } from "@/hooks/use-colors";
 import { trpc } from "@/lib/trpc";
-import { serializeRedFlags, TRADE_TYPES, type RedFlag } from "@/shared/types";
+import { serializeFlags } from "@/shared/review-flags";
+import { maskPhone, maskEmail } from "@/shared/customer-privacy";
+import {
+  REVIEW_CATEGORIES,
+  REVIEW_CATEGORY_KEYS,
+  type ReviewCategoryKey,
+  type ReviewCategoryValue,
+  type ReviewCategoryRatings,
+  type WouldWorkAgainValue,
+  emptyCategoryRatings,
+  validateReviewRatings,
+  serializeNewCategories,
+  categoriesToLegacyFlat,
+  getCalculatedOverallRating,
+  getFinalOverallRating,
+  getOverallRatingExplanation,
+} from "@/shared/review-categories";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { Platform as RNPlatform } from "react-native";
-
-const CATEGORY_FIELDS = [
-  {
-    key: "ratingPaymentReliability" as const,
-    label: "Payment Reliability",
-    description: "How reliable was their payment?",
-  },
-  {
-    key: "ratingCommunication" as const,
-    label: "Communication",
-    description: "Were they responsive and clear?",
-  },
-  {
-    key: "ratingScopeChanges" as const,
-    label: "Scope Changes",
-    description: "How did they handle scope changes?",
-  },
-  {
-    key: "ratingPropertyRespect" as const,
-    label: "Property Respect",
-    description: "Did they respect your property?",
-  },
-  {
-    key: "ratingPermitPulling" as const,
-    label: "Permitting Cooperation",
-    description: "Did they cooperate on permits?",
-  },
-  {
-    key: "ratingOverallJobExperience" as const,
-    label: "Overall Job Experience",
-    description: "Overall — would you work with them again?",
-  },
-] as const;
-
-type CategoryKey = (typeof CATEGORY_FIELDS)[number]["key"];
+import { track } from "@/lib/analytics";
 
 interface SelectedPhoto {
   uri: string;
@@ -94,17 +77,78 @@ export default function AddReviewScreen() {
   const [newState, setNewState] = useState("");
   const [newZip, setNewZip] = useState("");
 
+  // Duplicate match state
+  const [potentialMatches, setPotentialMatches] = useState<any[]>([]);
+  const [showMatchSuggestions, setShowMatchSuggestions] = useState(false);
+  const [matchLookupPending, setMatchLookupPending] = useState(false);
+  const matchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounced duplicate lookup as user fills new customer form
+  const findMatches = trpc.customers.findMatches.useQuery(
+    {
+      firstName: newFirstName.trim(),
+      lastName: newLastName.trim(),
+      phone: newPhone.trim() || undefined,
+      email: newEmail.trim() || undefined,
+      city: newCity.trim() || undefined,
+      state: newState.trim() || undefined,
+      zip: newZip.trim() || undefined,
+    },
+    { enabled: false },
+  );
+
+  const triggerMatchLookup = useCallback(() => {
+    if (matchDebounceRef.current) clearTimeout(matchDebounceRef.current);
+    const hasEnoughInfo =
+      (newFirstName.trim().length >= 2 && newLastName.trim().length >= 2) ||
+      newPhone.trim().length >= 7 ||
+      (newEmail.trim().length >= 5 && newEmail.includes("@"));
+
+    if (!hasEnoughInfo) {
+      setPotentialMatches([]);
+      setShowMatchSuggestions(false);
+      return;
+    }
+
+    setMatchLookupPending(true);
+    matchDebounceRef.current = setTimeout(async () => {
+      try {
+        const result = await findMatches.refetch();
+        const matches = result.data ?? [];
+        setPotentialMatches(matches);
+        setShowMatchSuggestions(matches.length > 0);
+      } catch {
+        // Non-critical
+      } finally {
+        setMatchLookupPending(false);
+      }
+    }, 500);
+  }, [newFirstName, newLastName, newPhone, newEmail, newCity, newState, newZip]);
+
+  useEffect(() => {
+    if (showNewCustomerForm) triggerMatchLookup();
+  }, [newFirstName, newLastName, newPhone, newEmail, newCity, newState, triggerMatchLookup, showNewCustomerForm]);
+
   // Review fields
-  const [overallRating, setOverallRating] = useState(0);
-  const [categoryRatings, setCategoryRatings] = useState<Record<CategoryKey, number>>({
-    ratingPaymentReliability: 0,
-    ratingCommunication: 0,
-    ratingScopeChanges: 0,
-    ratingPropertyRespect: 0,
-    ratingPermitPulling: 0,
-    ratingOverallJobExperience: 0,
-  });
-  const [selectedFlags, setSelectedFlags] = useState<RedFlag[]>([]);
+  const [categoryRatings, setCategoryRatings] = useState<ReviewCategoryRatings>(
+    emptyCategoryRatings(),
+  );
+  const [wouldWorkAgain, setWouldWorkAgain] = useState<WouldWorkAgainValue>("na");
+  const [selectedRedFlags, setSelectedRedFlags] = useState<string[]>([]);
+  const [selectedGreenFlags, setSelectedGreenFlags] = useState<string[]>([]);
+
+  const calculatedOverallRating = useMemo(
+    () => getCalculatedOverallRating(categoryRatings),
+    [categoryRatings],
+  );
+  const overallRating = useMemo(
+    () => getFinalOverallRating(categoryRatings, wouldWorkAgain, selectedRedFlags, selectedGreenFlags),
+    [categoryRatings, wouldWorkAgain, selectedRedFlags, selectedGreenFlags],
+  );
+  const overallRatingExplanation = useMemo(
+    () => getOverallRatingExplanation(categoryRatings, wouldWorkAgain, selectedRedFlags, selectedGreenFlags),
+    [categoryRatings, wouldWorkAgain, selectedRedFlags, selectedGreenFlags],
+  );
   const [reviewText, setReviewText] = useState("");
   const [jobType, setJobType] = useState("");
   const [jobDate, setJobDate] = useState("");
@@ -118,13 +162,14 @@ export default function AddReviewScreen() {
   // API
   const { data: searchResults } = trpc.customers.search.useQuery(
     { query: searchQuery },
-    { enabled: searchQuery.length >= 2 }
+    { enabled: searchQuery.length >= 2 },
   );
   const createCustomer = trpc.customers.create.useMutation();
   const utils = trpc.useUtils();
   const addReviewPhotos = trpc.reviews.addPhotos.useMutation();
   const createReview = trpc.reviews.create.useMutation({
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      track("review_created", { customer_id: variables.customerId, overall_rating: variables.overallRating });
       if (RNPlatform.OS !== "web") {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
@@ -137,9 +182,31 @@ export default function AddReviewScreen() {
     },
   });
 
-  const toggleFlag = (flag: RedFlag) => {
-    setSelectedFlags((prev) =>
-      prev.includes(flag) ? prev.filter((f) => f !== flag) : [...prev, flag]
+  // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+  const setCatScore = (key: ReviewCategoryKey, score: number) => {
+    setCategoryRatings((prev) => ({
+      ...prev,
+      [key]: { score: score || null, notApplicable: false },
+    }));
+  };
+
+  const setCatNa = (key: ReviewCategoryKey, na: boolean) => {
+    setCategoryRatings((prev) => ({
+      ...prev,
+      [key]: na ? { score: null, notApplicable: true } : { score: null, notApplicable: false },
+    }));
+  };
+
+  const toggleRedFlag = (flag: string) => {
+    setSelectedRedFlags((prev) =>
+      prev.includes(flag) ? prev.filter((f) => f !== flag) : [...prev, flag],
+    );
+  };
+
+  const toggleGreenFlag = (flag: string) => {
+    setSelectedGreenFlags((prev) =>
+      prev.includes(flag) ? prev.filter((f) => f !== flag) : [...prev, flag],
     );
   };
 
@@ -171,17 +238,19 @@ export default function AddReviewScreen() {
         Alert.alert("Required", "City, state, and ZIP code are required.");
         return;
       }
-      
-      // Warn if phone is missing (highly recommended but optional)
       if (!newPhone.trim()) {
         return new Promise((resolve) => {
           Alert.alert(
             "Phone Number Recommended",
-            "Phone numbers help prevent duplicate customer records. Skipping this increases the risk of the same person having multiple reviews in different locations. Are you sure you want to continue?",
+            "Phone numbers help prevent duplicate customer records. Are you sure you want to continue?",
             [
               { text: "Cancel", onPress: () => resolve(null), style: "cancel" },
-              { text: "Continue Without Phone", onPress: () => resolve(true), style: "destructive" },
-            ]
+              {
+                text: "Continue Without Phone",
+                onPress: () => resolve(true),
+                style: "destructive",
+              },
+            ],
           );
         }).then((shouldContinue) => {
           if (!shouldContinue) return;
@@ -189,8 +258,7 @@ export default function AddReviewScreen() {
         });
       }
       proceedWithCustomerCreation();
-    } catch (error) {
-      console.error("Error creating customer:", error);
+    } catch {
       Alert.alert("Error", "Failed to create customer. Please try again.");
     }
   };
@@ -208,16 +276,10 @@ export default function AddReviewScreen() {
         zip: newZip.trim(),
       });
 
-      // Handle duplicate detection response
       if ((result as any).isDuplicate) {
-        // Exact match found - use existing customer
         handleSelectCustomer((result as any).id, `${newFirstName} ${newLastName}`);
-        Alert.alert(
-          "Customer Found",
-          (result as any).message || "Using existing customer profile."
-        );
+        Alert.alert("Customer Found", (result as any).message || "Using existing customer profile.");
       } else if ((result as any).duplicates && (result as any).duplicates.length > 0) {
-        // Similar matches found - show confirmation dialog
         const duplicates = (result as any).duplicates;
         const options = duplicates.map((d: any) => ({
           text: `${d.firstName} ${d.lastName} (${d.city}, ${d.state}) - ${d.reviewCount} reviews`,
@@ -230,7 +292,6 @@ export default function AddReviewScreen() {
         options.push({
           text: "Create New Customer",
           onPress: () => {
-            // Continue with creating new customer
             const id = (result as any).id;
             handleSelectCustomer(id as number, `${newFirstName} ${newLastName}`);
             setShowNewCustomerForm(false);
@@ -238,13 +299,8 @@ export default function AddReviewScreen() {
           },
         });
         options.push({ text: "Cancel", onPress: () => {} });
-        Alert.alert(
-          "Similar Customers Found",
-          "Is this one of these existing customers?",
-          options
-        );
+        Alert.alert("Similar Customers Found", "Is this one of these existing customers?", options);
       } else {
-        // No duplicates - new customer created
         const id = (result as any).id;
         handleSelectCustomer(id as number, `${newFirstName} ${newLastName}`);
         setShowNewCustomerForm(false);
@@ -284,35 +340,63 @@ export default function AddReviewScreen() {
     setSelectedPhotos((prev) => prev.filter((_, i) => i !== index));
   };
 
+  // ─── Validation + Submit ──────────────────────────────────────────────────────
+
+  const canSubmit = (() => {
+    if (!selectedCustomerId) return false;
+    if (wouldWorkAgain !== "no" && (calculatedOverallRating == null || calculatedOverallRating === 0)) return false;
+    const errs = validateReviewRatings({
+      overallRating,
+      categories: categoryRatings,
+      wouldWorkAgain,
+    });
+    return errs.length === 0;
+  })();
+
   const handleSubmit = async () => {
     if (!hasAgreedToTerms) {
       setShowLegalModal(true);
       return;
     }
-
     if (!selectedCustomerId) {
       Alert.alert("Select Customer", "Please select or create a customer first.");
       return;
     }
-    if (overallRating === 0) {
-      Alert.alert("Rating Required", "Please give an overall star rating.");
+
+    const errs = validateReviewRatings({
+      overallRating,
+      categories: categoryRatings,
+      wouldWorkAgain,
+    });
+    if (errs.length > 0) {
+      Alert.alert("Missing Info", errs[0].message);
       return;
     }
-    const allCategoryRated = Object.values(categoryRatings).every((r) => r > 0);
-    if (!allCategoryRated) {
-      Alert.alert("Category Ratings", "Please rate all categories before submitting.");
-      return;
-    }
+
+    const legacyFlat = categoriesToLegacyFlat(categoryRatings);
+    const categoryDataJson = serializeNewCategories(categoryRatings, wouldWorkAgain, selectedRedFlags, selectedGreenFlags);
+    const flagsJson = (selectedRedFlags.length > 0 || selectedGreenFlags.length > 0)
+      ? serializeFlags(selectedRedFlags, selectedGreenFlags)
+      : undefined;
 
     const { reviewId } = await createReview.mutateAsync({
       customerId: selectedCustomerId,
       overallRating,
-      ...categoryRatings,
+      calculatedOverallRating: calculatedOverallRating ?? undefined,
+      ratingPaymentReliability: legacyFlat.ratingPaymentReliability,
+      ratingCommunication: legacyFlat.ratingCommunication,
+      ratingScopeChanges: legacyFlat.ratingScopeChanges,
+      ratingPropertyRespect: legacyFlat.ratingPropertyRespect,
+      ratingPermitPulling: legacyFlat.ratingPermitPulling,
+      ratingOverallJobExperience: legacyFlat.ratingOverallJobExperience,
+      categoryDataJson,
+      wouldWorkAgain: wouldWorkAgain as string,
       reviewText: reviewText.trim() || undefined,
       jobType: jobType.trim() || undefined,
       jobDate: jobDate.trim() || undefined,
       jobAmount: jobAmount.trim() || undefined,
-      redFlags: selectedFlags.length > 0 ? serializeRedFlags(selectedFlags) : undefined,
+      redFlags: flagsJson,
+      greenFlags: flagsJson ? undefined : undefined,
     });
 
     if (selectedPhotos.length > 0 && reviewId) {
@@ -342,21 +426,26 @@ export default function AddReviewScreen() {
     }
   };
 
+  // ─── Render ───────────────────────────────────────────────────────────────────
+
+  const WOULD_WORK_OPTIONS: { value: WouldWorkAgainValue; label: string }[] = [
+    { value: "yes", label: "Yes" },
+    { value: "no", label: "No" },
+    { value: "na", label: "N/A" },
+  ];
+
   return (
-    <ScreenContainer edges={["top", "left", "right"]}>
-      {/* Legal Disclaimer Modal */}
+    <ScreenBackground backgroundKey="reviews" overlayOpacity={0.88}>
+    <ScreenContainer edges={["top", "left", "right"]} containerClassName="bg-transparent">
       <LegalDisclaimerModal
         visible={showLegalModal}
         onAgree={() => {
           setHasAgreedToTerms(true);
           setShowLegalModal(false);
         }}
-        onDisagree={() => {
-          setShowLegalModal(false);
-        }}
+        onDisagree={() => setShowLegalModal(false)}
       />
 
-      {/* Header */}
       <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
         <Pressable
           onPress={() => router.back()}
@@ -367,13 +456,20 @@ export default function AddReviewScreen() {
         <Text style={[styles.topTitle, { color: colors.foreground }]}>Add Review</Text>
         <Pressable
           onPress={handleSubmit}
-          disabled={createReview.isPending}
+          disabled={createReview.isPending || !canSubmit}
           style={({ pressed }) => [styles.submitBtn, pressed && { opacity: 0.7 }]}
         >
           {createReview.isPending ? (
             <ActivityIndicator color={colors.primary} size="small" />
           ) : (
-            <Text style={[styles.submitText, { color: colors.primary }]}>Submit</Text>
+            <Text
+              style={[
+                styles.submitText,
+                { color: canSubmit ? colors.primary : colors.muted },
+              ]}
+            >
+              Submit
+            </Text>
           )}
         </Pressable>
       </View>
@@ -383,8 +479,10 @@ export default function AddReviewScreen() {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          {/* Customer Selection */}
-          <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          {/* ── Customer Selection ── */}
+          <View
+            style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
             <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Customer</Text>
 
             {selectedCustomerId && !showSearch ? (
@@ -411,7 +509,14 @@ export default function AddReviewScreen() {
             ) : (
               <>
                 <TextInput
-                  style={[styles.input, { backgroundColor: colors.background, borderColor: colors.border, color: colors.foreground }]}
+                  style={[
+                    styles.input,
+                    {
+                      backgroundColor: colors.background,
+                      borderColor: colors.border,
+                      color: colors.foreground,
+                    },
+                  ]}
                   placeholder="Search by name or phone..."
                   placeholderTextColor={colors.muted}
                   value={searchQuery}
@@ -420,25 +525,30 @@ export default function AddReviewScreen() {
                 />
                 {searchQuery.length >= 2 && searchResults && searchResults.length > 0 && (
                   <View style={[styles.searchResults, { borderColor: colors.border }]}>
-                    {searchResults.map((c) => (
+                    {searchResults.map((c: any) => (
                       <Pressable
                         key={c.id}
-                        onPress={() => handleSelectCustomer(c.id, `${c.firstName} ${c.lastName}`)}
-                        style={({ pressed }) => [styles.searchResultItem, pressed && { opacity: 0.6 }]}
+                        onPress={() =>
+                          handleSelectCustomer(c.id, `${c.firstName} ${c.lastName}`)
+                        }
+                        style={({ pressed }) => [
+                          styles.searchResultItem,
+                          { borderBottomColor: colors.border },
+                          pressed && { opacity: 0.6 },
+                        ]}
                       >
                         <Text style={[styles.searchResultText, { color: colors.foreground }]}>
                           {c.firstName} {c.lastName}
                         </Text>
-                        {c.phone && (
-                          <Text style={[styles.searchResultSubtext, { color: colors.muted }]}>
-                            {c.phone}
-                          </Text>
-                        )}
+                        <Text style={[styles.searchResultSubtext, { color: colors.muted }]}>
+                          {[c.city, c.state].filter(Boolean).join(", ")}
+                          {c.reviewCount > 0 ? ` · ${c.reviewCount} reviews` : ""}
+                        </Text>
                       </Pressable>
                     ))}
                   </View>
                 )}
-                {searchQuery.length >= 2 && (!searchResults || searchResults.length === 0) && (
+                {searchQuery.length >= 2 && (
                   <Pressable
                     onPress={() => setShowNewCustomerForm(true)}
                     style={({ pressed }) => [
@@ -457,6 +567,69 @@ export default function AddReviewScreen() {
 
             {showNewCustomerForm && (
               <View style={styles.newCustomerForm}>
+                {/* ── Duplicate Match Suggestions ── */}
+                {showMatchSuggestions && potentialMatches.length > 0 && (
+                  <View style={[styles.matchSuggestionsBox, { borderColor: colors.warning, backgroundColor: colors.warning + "10" }]}>
+                    <Text style={[styles.matchSuggestionsTitle, { color: colors.warning }]}>
+                      We found an existing customer that may match
+                    </Text>
+                    {potentialMatches.map((match: any) => (
+                      <View key={match.id} style={[styles.matchCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.matchCardName, { color: colors.foreground }]}>
+                            {match.firstName} {match.lastName}
+                          </Text>
+                          {!!(match.city || match.state) && (
+                            <Text style={{ fontSize: 13, color: colors.muted }}>
+                              {[match.city, match.state, match.zip].filter(Boolean).join(", ")}
+                            </Text>
+                          )}
+                          {!!match.phone && (
+                            <Text style={{ fontSize: 12, color: colors.muted }}>
+                              {maskPhone(match.phone)}
+                            </Text>
+                          )}
+                          <Text style={{ fontSize: 12, color: colors.muted, marginTop: 2 }}>
+                            {match.reviewCount} {match.reviewCount === 1 ? "review" : "reviews"}
+                            {parseFloat(match.overallRating ?? "0") > 0
+                              ? ` · ${parseFloat(match.overallRating).toFixed(1)} avg`
+                              : ""}
+                          </Text>
+                        </View>
+                        <Pressable
+                          onPress={() => {
+                            handleSelectCustomer(match.id, `${match.firstName} ${match.lastName}`);
+                            setShowNewCustomerForm(false);
+                            setShowMatchSuggestions(false);
+                            resetNewCustomerForm();
+                          }}
+                          style={({ pressed }) => [
+                            styles.useExistingBtn,
+                            { backgroundColor: colors.primary },
+                            pressed && { opacity: 0.8 },
+                          ]}
+                        >
+                          <Text style={styles.useExistingBtnText}>Use This Customer</Text>
+                        </Pressable>
+                      </View>
+                    ))}
+                    <Pressable
+                      onPress={() => setShowMatchSuggestions(false)}
+                      style={({ pressed }) => [pressed && { opacity: 0.6 }]}
+                    >
+                      <Text style={[styles.someoneElseText, { color: colors.muted }]}>
+                        This is someone else — continue creating
+                      </Text>
+                    </Pressable>
+                  </View>
+                )}
+                {matchLookupPending && (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <ActivityIndicator size="small" color={colors.muted} />
+                    <Text style={{ fontSize: 12, color: colors.muted }}>Checking for existing customers...</Text>
+                  </View>
+                )}
+
                 <TextInput
                   style={[styles.input, { backgroundColor: colors.background, borderColor: colors.border, color: colors.foreground }]}
                   placeholder="First Name *"
@@ -479,8 +652,20 @@ export default function AddReviewScreen() {
                   onChangeText={setNewPhone}
                   keyboardType="phone-pad"
                 />
-                <Text style={{ fontSize: 12, color: colors.muted, marginTop: -8 }}>
-                  Phone helps prevent duplicate customer records
+                <Text style={[styles.privacyNote, { color: colors.muted }]}>
+                  Private — only visible to you. Helps prevent duplicate records.
+                </Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.background, borderColor: colors.border, color: colors.foreground }]}
+                  placeholder="Email (Optional)"
+                  placeholderTextColor={colors.muted}
+                  value={newEmail}
+                  onChangeText={setNewEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+                <Text style={[styles.privacyNote, { color: colors.muted }]}>
+                  Private — only visible to you.
                 </Text>
                 <TextInput
                   style={[styles.input, { backgroundColor: colors.background, borderColor: colors.border, color: colors.foreground }]}
@@ -489,27 +674,33 @@ export default function AddReviewScreen() {
                   value={newCity}
                   onChangeText={setNewCity}
                 />
-                <TextInput
-                  style={[styles.input, { backgroundColor: colors.background, borderColor: colors.border, color: colors.foreground }]}
-                  placeholder="State *"
-                  placeholderTextColor={colors.muted}
-                  value={newState}
-                  onChangeText={setNewState}
-                />
-                <TextInput
-                  style={[styles.input, { backgroundColor: colors.background, borderColor: colors.border, color: colors.foreground }]}
-                  placeholder="ZIP Code *"
-                  placeholderTextColor={colors.muted}
-                  value={newZip}
-                  onChangeText={setNewZip}
-                  keyboardType="number-pad"
-                />
+                <View style={styles.inputRow}>
+                  <TextInput
+                    style={[styles.inputHalf, { backgroundColor: colors.background, borderColor: colors.border, color: colors.foreground }]}
+                    placeholder="State *"
+                    placeholderTextColor={colors.muted}
+                    value={newState}
+                    onChangeText={setNewState}
+                  />
+                  <TextInput
+                    style={[styles.inputHalf, { backgroundColor: colors.background, borderColor: colors.border, color: colors.foreground }]}
+                    placeholder="ZIP *"
+                    placeholderTextColor={colors.muted}
+                    value={newZip}
+                    onChangeText={setNewZip}
+                    keyboardType="number-pad"
+                  />
+                </View>
                 <Text style={[styles.privacyNote, { color: colors.muted }]}>
-                  City, state, and ZIP are private and only visible to you
+                  City, state, and ZIP may be visible to other users.
                 </Text>
                 <View style={styles.buttonRow}>
                   <Pressable
-                    onPress={() => setShowNewCustomerForm(false)}
+                    onPress={() => {
+                      setShowNewCustomerForm(false);
+                      setShowMatchSuggestions(false);
+                      setPotentialMatches([]);
+                    }}
                     style={({ pressed }) => [
                       styles.halfBtn,
                       { borderColor: colors.border },
@@ -530,7 +721,7 @@ export default function AddReviewScreen() {
                     {createCustomer.isPending ? (
                       <ActivityIndicator color="#fff" size="small" />
                     ) : (
-                      <Text style={styles.halfBtnTextWhite}>Create</Text>
+                      <Text style={styles.halfBtnTextWhite}>Create Customer</Text>
                     )}
                   </Pressable>
                 </View>
@@ -538,9 +729,13 @@ export default function AddReviewScreen() {
             )}
           </View>
 
-          {/* Job Details */}
-          <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Job Details (Optional)</Text>
+          {/* ── Job Details ── */}
+          <View
+            style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
+            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
+              Job Details (Optional)
+            </Text>
             <TextInput
               style={[styles.input, { backgroundColor: colors.background, borderColor: colors.border, color: colors.foreground }]}
               placeholder="Job type (e.g. Kitchen Remodel, Roof Repair)"
@@ -567,68 +762,136 @@ export default function AddReviewScreen() {
             </View>
           </View>
 
-          {/* Overall Rating */}
-          <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Overall Rating *</Text>
+          {/* ── Overall Rating (auto-calculated) ── */}
+          <View
+            style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
+            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Overall Rating</Text>
             <View style={styles.overallRatingContainer}>
-              <StarRating
-                rating={overallRating}
-                size={44}
-                interactive
-                onRatingChange={setOverallRating}
-              />
+              <StarRating rating={overallRating} size={44} positionalColors />
               <Text style={[styles.overallRatingLabel, { color: colors.muted }]}>
-                {overallRating === 0
-                  ? "Tap to rate"
-                  : overallRating === 1
-                  ? "Avoid — Major Issues"
-                  : overallRating === 2
-                  ? "Poor — Many Problems"
-                  : overallRating === 3
-                  ? "Average — Some Issues"
-                  : overallRating === 4
-                  ? "Good — Minor Issues"
-                  : "Excellent — Highly Recommend"}
+                {calculatedOverallRating == null
+                  ? "Rate categories below to calculate"
+                  : wouldWorkAgain === "no"
+                    ? `0 stars (category avg: ${calculatedOverallRating.toFixed(1)})`
+                    : overallRating <= 1
+                      ? "Avoid — Major Issues"
+                      : overallRating <= 2
+                        ? "Poor — Many Problems"
+                        : overallRating <= 3
+                          ? "Average — Some Issues"
+                          : overallRating <= 4
+                            ? "Good — Minor Issues"
+                            : "Excellent — Highly Recommend"}
               </Text>
+              {overallRatingExplanation && (
+                <Text style={[styles.overrideText, { color: wouldWorkAgain === "no" ? "#DC2626" : colors.muted }]}>
+                  {overallRatingExplanation}
+                </Text>
+              )}
             </View>
           </View>
 
-          {/* Category Ratings */}
-          <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Category Ratings *</Text>
-            {CATEGORY_FIELDS.map(({ key, label, description }) => (
+          {/* ── Category Ratings ── */}
+          <View
+            style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
+            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
+              Category Ratings *
+            </Text>
+            <Text style={[styles.sectionSubtitle, { color: colors.muted }]}>
+              Rate each area or mark N/A if it doesn't apply.
+            </Text>
+            {REVIEW_CATEGORIES.map(({ key, label, description }) => (
               <View key={key} style={[styles.categoryDivider, { borderTopColor: colors.border }]}>
                 <CategoryRating
                   label={label}
                   description={description}
-                  rating={categoryRatings[key]}
+                  rating={categoryRatings[key].score}
+                  notApplicable={categoryRatings[key].notApplicable}
                   interactive
-                  onRatingChange={(r) =>
-                    setCategoryRatings((prev) => ({ ...prev, [key]: r }))
-                  }
+                  onRatingChange={(r) => setCatScore(key, r)}
+                  onNotApplicableChange={(na) => setCatNa(key, na)}
                 />
               </View>
             ))}
           </View>
 
-          {/* Red Flags */}
-          <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Red Flags</Text>
-            <Text style={[styles.sectionSubtitle, { color: colors.muted }]}>
-              Select any issues you experienced with this customer.
+          {/* ── Would Work Again ── */}
+          <View
+            style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
+            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
+              Would You Work With Them Again? *
             </Text>
-            <RedFlagChips selected={selectedFlags} onToggle={toggleFlag} />
+            <Text style={[styles.sectionSubtitle, { color: colors.muted }]}>
+              Would you take another job from this client?
+            </Text>
+            <View style={styles.segmentedRow}>
+              {WOULD_WORK_OPTIONS.map((opt) => {
+                const selected = wouldWorkAgain === opt.value;
+                const pillColor =
+                  opt.value === "yes"
+                    ? "#22C55E"
+                    : opt.value === "no"
+                      ? "#DC2626"
+                      : colors.muted;
+                return (
+                  <Pressable
+                    key={opt.value}
+                    onPress={() => setWouldWorkAgain(opt.value)}
+                    style={({ pressed }) => [
+                      styles.segmentPill,
+                      {
+                        backgroundColor: selected ? pillColor + "22" : "transparent",
+                        borderColor: selected ? pillColor : colors.border,
+                      },
+                      pressed && { opacity: 0.7 },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.segmentText,
+                        { color: selected ? pillColor : colors.muted },
+                        selected && { fontWeight: "700" },
+                      ]}
+                    >
+                      {opt.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </View>
 
-          {/* Written Review */}
-          <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          {/* ── Flags (Red + Green) ── */}
+          <View
+            style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
+            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Flags</Text>
+            <FlagChipsSection
+              selectedRedFlags={selectedRedFlags}
+              selectedGreenFlags={selectedGreenFlags}
+              onToggleRedFlag={toggleRedFlag}
+              onToggleGreenFlag={toggleGreenFlag}
+            />
+          </View>
+
+          {/* ── Written Review ── */}
+          <View
+            style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
             <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Written Review</Text>
             <TextInput
               style={[
                 styles.textArea,
-                { backgroundColor: colors.background, borderColor: colors.border, color: colors.foreground },
+                {
+                  backgroundColor: colors.background,
+                  borderColor: colors.border,
+                  color: colors.foreground,
+                },
               ]}
-              placeholder="Describe your experience with this customer. What went well? What were the issues? Would you recommend other contractors work with them?"
+              placeholder="Describe your experience working with this client..."
               placeholderTextColor={colors.muted}
               value={reviewText}
               onChangeText={setReviewText}
@@ -642,9 +905,13 @@ export default function AddReviewScreen() {
             </Text>
           </View>
 
-          {/* Photos */}
-          <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Photos (Optional)</Text>
+          {/* ── Photos ── */}
+          <View
+            style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
+            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
+              Photos (Optional)
+            </Text>
             <Text style={[styles.sectionSubtitle, { color: colors.muted }]}>
               Add photos to support your review (invoices, damage, etc.)
             </Text>
@@ -653,10 +920,7 @@ export default function AddReviewScreen() {
               <View style={styles.photoGrid}>
                 {selectedPhotos.map((photo, index) => (
                   <View key={index} style={[styles.photoItem, { borderColor: colors.border }]}>
-                    <Image
-                      source={{ uri: photo.uri }}
-                      style={styles.photoImage}
-                    />
+                    <Image source={{ uri: photo.uri }} style={styles.photoImage} />
                     <Pressable
                       onPress={() => removePhoto(index)}
                       style={[styles.removePhotoBtn, { backgroundColor: colors.primary }]}
@@ -676,20 +940,18 @@ export default function AddReviewScreen() {
                 pressed && { opacity: 0.6 },
               ]}
             >
-              <Text style={[styles.addPhotoBtnText, { color: colors.primary }]}>
-                + Add Photo
-              </Text>
+              <Text style={[styles.addPhotoBtnText, { color: colors.primary }]}>+ Add Photo</Text>
             </Pressable>
           </View>
 
-          {/* Submit */}
+          {/* ── Submit ── */}
           <View style={styles.submitContainer}>
             <Pressable
               onPress={handleSubmit}
-              disabled={createReview.isPending}
+              disabled={createReview.isPending || !canSubmit}
               style={({ pressed }) => [
                 styles.submitFullBtn,
-                { backgroundColor: colors.primary },
+                { backgroundColor: canSubmit ? colors.primary : colors.muted },
                 pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
                 createReview.isPending && { opacity: 0.6 },
               ]}
@@ -704,238 +966,65 @@ export default function AddReviewScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
     </ScreenContainer>
+    </ScreenBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  topBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 0.5,
-  },
-  backBtn: {
-    width: 70,
-  },
-  backText: {
-    fontSize: 17,
-  },
-  topTitle: {
-    fontSize: 17,
-    fontWeight: "600",
-    flex: 1,
-    textAlign: "center",
-  },
-  submitBtn: {
-    width: 70,
-    alignItems: "flex-end",
-  },
-  submitText: {
-    fontSize: 17,
-    fontWeight: "600",
-  },
-  scroll: {
-    padding: 16,
-    paddingBottom: 100,
-    gap: 16,
-  },
-  section: {
-    borderRadius: 14,
-    borderWidth: 1,
-    padding: 16,
-    gap: 12,
-  },
-  sectionTitle: {
-    fontSize: 17,
-    fontWeight: "700",
-  },
-  sectionSubtitle: {
-    fontSize: 13,
-    marginTop: -6,
-  },
-  selectedCustomer: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  selectedAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  selectedAvatarText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  selectedName: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  changeText: {
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  input: {
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
-  },
-  inputRow: {
-    flexDirection: "row",
-    gap: 12,
-  },
-  inputHalf: {
-    flex: 1,
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
-  },
-  searchResults: {
-    borderRadius: 10,
-    borderWidth: 1,
-    overflow: "hidden",
-  },
-  searchResultItem: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderBottomWidth: 0.5,
-  },
-  searchResultText: {
-    fontSize: 15,
-    fontWeight: "500",
-  },
-  searchResultSubtext: {
-    fontSize: 13,
-    marginTop: 2,
-  },
-  createNewBtn: {
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    alignItems: "center",
-  },
-  createNewText: {
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  privacyNote: {
-    fontSize: 12,
-    marginTop: -6,
-    marginBottom: 4,
-  },
-  newCustomerForm: {
-    gap: 12,
-    marginTop: 8,
-    paddingTop: 12,
-    borderTopWidth: 0.5,
-  },
-  buttonRow: {
-    flexDirection: "row",
-    gap: 12,
-  },
-  halfBtn: {
-    flex: 1,
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingVertical: 12,
-    alignItems: "center",
-  },
-  halfBtnText: {
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  halfBtnTextWhite: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#fff",
-  },
-  overallRatingContainer: {
-    alignItems: "center",
-    gap: 12,
-  },
-  overallRatingLabel: {
-    fontSize: 14,
-  },
-  categoryDivider: {
-    borderTopWidth: 1,
-    paddingTop: 12,
-  },
-  textArea: {
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 15,
-  },
-  charCount: {
-    fontSize: 12,
-    textAlign: "right",
-  },
-  photoGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 12,
-  },
-  photoItem: {
-    width: "48%",
-    aspectRatio: 1,
-    borderRadius: 10,
-    borderWidth: 1,
-    overflow: "hidden",
-    position: "relative",
-  },
-  photoImage: {
-    width: "100%",
-    height: "100%",
-  },
-  removePhotoBtn: {
-    position: "absolute",
-    top: 4,
-    right: 4,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  removePhotoBtnText: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  addPhotoBtn: {
-    borderRadius: 10,
-    borderWidth: 2,
-    borderStyle: "dashed",
-    paddingVertical: 16,
-    alignItems: "center",
-  },
-  addPhotoBtnText: {
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  submitContainer: {
-    gap: 12,
-  },
-  submitFullBtn: {
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: "center",
-  },
-  submitFullBtnText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "700",
-  },
+  topBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 0.5 },
+  backBtn: { width: 70 },
+  backText: { fontSize: 17 },
+  topTitle: { fontSize: 17, fontWeight: "600", flex: 1, textAlign: "center" },
+  submitBtn: { width: 70, alignItems: "flex-end" },
+  submitText: { fontSize: 17, fontWeight: "600" },
+  scroll: { padding: 16, paddingBottom: 100, gap: 16 },
+  section: { borderRadius: 14, borderWidth: 1, padding: 16, gap: 12 },
+  sectionTitle: { fontSize: 17, fontWeight: "700" },
+  sectionSubtitle: { fontSize: 13, marginTop: -6 },
+  selectedCustomer: { flexDirection: "row", alignItems: "center", gap: 12 },
+  selectedAvatar: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
+  selectedAvatarText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  selectedName: { flex: 1, fontSize: 16, fontWeight: "600" },
+  changeText: { fontSize: 14, fontWeight: "600" },
+  input: { borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15 },
+  inputRow: { flexDirection: "row", gap: 12 },
+  inputHalf: { flex: 1, borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15 },
+  searchResults: { borderRadius: 10, borderWidth: 1, overflow: "hidden" },
+  searchResultItem: { paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 0.5 },
+  searchResultText: { fontSize: 15, fontWeight: "500" },
+  searchResultSubtext: { fontSize: 13, marginTop: 2 },
+  createNewBtn: { borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 12, alignItems: "center" },
+  createNewText: { fontSize: 15, fontWeight: "600" },
+  privacyNote: { fontSize: 12, marginTop: -6, marginBottom: 4 },
+  matchSuggestionsBox: { borderRadius: 12, borderWidth: 1.5, padding: 12, gap: 10, marginBottom: 4 },
+  matchSuggestionsTitle: { fontSize: 14, fontWeight: "700" },
+  matchCard: { flexDirection: "row", alignItems: "center", borderRadius: 10, borderWidth: 1, padding: 10, gap: 10 },
+  matchCardName: { fontSize: 15, fontWeight: "600" },
+  useExistingBtn: { borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, flexShrink: 0 },
+  useExistingBtnText: { color: "#fff", fontSize: 13, fontWeight: "700" },
+  someoneElseText: { fontSize: 13, textAlign: "center", paddingVertical: 4 },
+  newCustomerForm: { gap: 12, marginTop: 8, paddingTop: 12, borderTopWidth: 0.5 },
+  buttonRow: { flexDirection: "row", gap: 12 },
+  halfBtn: { flex: 1, borderRadius: 10, borderWidth: 1, paddingVertical: 12, alignItems: "center" },
+  halfBtnText: { fontSize: 15, fontWeight: "600" },
+  halfBtnTextWhite: { fontSize: 15, fontWeight: "600", color: "#fff" },
+  overallRatingContainer: { alignItems: "center", gap: 12 },
+  overallRatingLabel: { fontSize: 14 },
+  overrideText: { fontSize: 13, fontWeight: "600", textAlign: "center", marginTop: 2 },
+  categoryDivider: { borderTopWidth: 1, paddingTop: 4 },
+  segmentedRow: { flexDirection: "row", gap: 10, marginTop: 4 },
+  segmentPill: { flex: 1, paddingVertical: 10, borderRadius: 10, borderWidth: 1.5, alignItems: "center" },
+  segmentText: { fontSize: 15 },
+  textArea: { borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15 },
+  charCount: { fontSize: 12, textAlign: "right" },
+  photoGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  photoItem: { width: "48%" as any, aspectRatio: 1, borderRadius: 10, borderWidth: 1, overflow: "hidden", position: "relative" },
+  photoImage: { width: "100%", height: "100%" },
+  removePhotoBtn: { position: "absolute", top: 4, right: 4, width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center" },
+  removePhotoBtnText: { color: "#fff", fontSize: 18, fontWeight: "700" },
+  addPhotoBtn: { borderRadius: 10, borderWidth: 2, borderStyle: "dashed", paddingVertical: 16, alignItems: "center" },
+  addPhotoBtnText: { fontSize: 15, fontWeight: "600" },
+  submitContainer: { gap: 12 },
+  submitFullBtn: { borderRadius: 12, paddingVertical: 14, alignItems: "center" },
+  submitFullBtnText: { color: "#fff", fontSize: 16, fontWeight: "700" },
 });

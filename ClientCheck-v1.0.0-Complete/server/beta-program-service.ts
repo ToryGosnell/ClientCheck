@@ -171,7 +171,7 @@ export class BetaProgramService {
         ✅ Free premium subscription during beta
         ✅ Recognition as a beta tester in the app
         
-        Questions? Reply to this email or visit https://contractorvet.app/beta
+        Questions? Reply to this email or visit https://clientcheck.app/beta
         
         Best regards,
         The ClientCheck Team

@@ -1,7 +1,7 @@
 import nodemailer from "nodemailer";
 
 const emailProvider = process.env.EMAIL_PROVIDER || "smtp";
-const emailFrom = process.env.EMAIL_FROM || "noreply@contractorblacklist.app";
+const emailFrom = process.env.EMAIL_FROM || "noreply@clientcheck.app";
 const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
 const smtpPort = parseInt(process.env.SMTP_PORT || "587");
 const smtpUser = process.env.SMTP_USER;
@@ -144,7 +144,7 @@ export async function sendDisputeFiledEmail(
         <p>Hi ${contractorName},</p>
         <p><strong>${customerName}</strong> has disputed your review and provided their response.</p>
         <p>You can view their response and the full dispute details in your app.</p>
-        <p><a href="https://contractorblacklist.app/review/${reviewId}" style="background-color: #DC2626; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">View Dispute</a></p>
+        <p><a href="https://clientcheck.app/review/${reviewId}" style="background-color: #DC2626; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">View Dispute</a></p>
         <p>If you believe the dispute is invalid, you can respond with additional information.</p>
       `,
     });
@@ -181,7 +181,7 @@ export async function sendReviewPostedEmail(
         <p>Hi ${contractorName},</p>
         <p><strong>${customerName}</strong> has posted a review about their experience working with you.</p>
         <p><strong>Rating:</strong> ${stars} (${rating}/5)</p>
-        <p><a href="https://contractorblacklist.app/review/${reviewId}" style="background-color: #DC2626; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">View Review</a></p>
+        <p><a href="https://clientcheck.app/review/${reviewId}" style="background-color: #DC2626; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">View Review</a></p>
         <p>If you believe this review is inaccurate, you can dispute it and provide your response.</p>
       `,
     });
@@ -222,7 +222,7 @@ export async function sendModerationDecisionEmail(
         <p>Hi ${contractorName},</p>
         <p>${decisionText[decision]}</p>
         ${reason ? `<p><strong>Reason:</strong> ${reason}</p>` : ""}
-        <p><a href="https://contractorblacklist.app/my-reviews" style="background-color: #DC2626; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">View My Reviews</a></p>
+        <p><a href="https://clientcheck.app/my-reviews" style="background-color: #DC2626; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">View My Reviews</a></p>
       `,
     });
     return true;

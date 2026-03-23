@@ -116,12 +116,12 @@ export default function MyDisputesScreen() {
         <Text style={[styles.timelineText, { color: colors.muted }]}>
           📅 Submitted: {item.submittedAt.toLocaleDateString()}
         </Text>
-        {item.decidedAt && (
+        {!!item.decidedAt && (
           <Text style={[styles.timelineText, { color: colors.muted }]}>
             ✓ Decided: {item.decidedAt.toLocaleDateString()}
           </Text>
         )}
-        {item.daysRemaining && (
+        {!!item.daysRemaining && (
           <Text style={[styles.timelineText, { color: colors.warning }]}>
             ⏱️ {item.daysRemaining} days remaining
           </Text>

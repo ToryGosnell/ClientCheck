@@ -1,15 +1,30 @@
-import { Tabs } from "expo-router";
+import { Tabs, useRouter } from "expo-router";
+import { useEffect } from "react";
 import { Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { HapticTab } from "@/components/haptic-tab";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { useColors } from "@/hooks/use-colors";
+import { useAuth } from "@/hooks/use-auth";
+import { trpc } from "@/lib/trpc";
 
 export default function TabLayout() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const bottomPadding = Platform.OS === "web" ? 12 : Math.max(insets.bottom, 8);
   const tabBarHeight = 56 + bottomPadding;
+  const router = useRouter();
+  const { user } = useAuth();
+
+  const legalQuery = trpc.legal.getAcceptanceStatus.useQuery(undefined, {
+    enabled: !!user,
+  });
+
+  useEffect(() => {
+    if (user && legalQuery.data && !legalQuery.data.accepted) {
+      router.replace("/legal-acceptance" as never);
+    }
+  }, [user, legalQuery.data]);
 
   return (
     <Tabs
@@ -69,6 +84,9 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <IconSymbol size={26} name="person.fill" color={color} />,
         }}
       />
+      {/* Hidden tab routes — accessible by navigation but not shown in tab bar */}
+      <Tabs.Screen name="search" options={{ href: null }} />
+      <Tabs.Screen name="pre-job-risk-check" options={{ href: null }} />
     </Tabs>
   );
 }

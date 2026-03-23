@@ -43,7 +43,7 @@ export default function CustomerOnboarding1Screen() {
               <View className="gap-2">
                 <Text className="text-base font-semibold text-foreground">💰 Fair Pricing</Text>
                 <Text className="text-sm text-muted">
-                  You pay the same as contractors: $9.99/month or $100/year. No surprises, no
+                  You pay the same as contractors: $120/year. No surprises, no
                   special treatment.
                 </Text>
               </View>

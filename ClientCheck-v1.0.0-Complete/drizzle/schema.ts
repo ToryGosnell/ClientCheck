@@ -18,7 +18,10 @@ export const users = mysqlTable("users", {
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
-  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  role: mysqlEnum("role", ["user", "admin", "contractor", "customer"]).default("user").notNull(),
+  termsAcceptedAt: timestamp("termsAcceptedAt"),
+  privacyAcceptedAt: timestamp("privacyAcceptedAt"),
+  legalAcceptanceVersion: varchar("legalAcceptanceVersion", { length: 32 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
@@ -69,11 +72,24 @@ export const customers = mysqlTable("customers", {
   city: varchar("city", { length: 128 }).notNull(),
   state: varchar("state", { length: 64 }).notNull(),
   zip: varchar("zip", { length: 16 }).notNull(),
+  // Normalized fields for dedup and search
+  normalizedName: varchar("normalizedName", { length: 255 }),
+  normalizedPhone: varchar("normalizedPhone", { length: 32 }),
+  normalizedEmail: varchar("normalizedEmail", { length: 320 }),
+  normalizedAddressKey: varchar("normalizedAddressKey", { length: 512 }),
+  searchText: text("searchText"),
   mergedIntoId: int("mergedIntoId"),
   isDuplicate: boolean("isDuplicate").default(false).notNull(),
   // Aggregate rating fields (denormalized for fast reads)
   overallRating: decimal("overallRating", { precision: 3, scale: 2 }).default("0.00"),
+  calculatedOverallScore: decimal("calculatedOverallScore", { precision: 3, scale: 2 }).default("0.00"),
   reviewCount: int("reviewCount").default(0).notNull(),
+  wouldWorkAgainYesCount: int("wouldWorkAgainYesCount").default(0).notNull(),
+  wouldWorkAgainNoCount: int("wouldWorkAgainNoCount").default(0).notNull(),
+  wouldWorkAgainNaCount: int("wouldWorkAgainNaCount").default(0).notNull(),
+  redFlagCount: int("redFlagCount").default(0).notNull(),
+  criticalRedFlagCount: int("criticalRedFlagCount").default(0).notNull(),
+  greenFlagCount: int("greenFlagCount").default(0).notNull(),
   ratingPaymentReliability: decimal("ratingPaymentReliability", { precision: 3, scale: 2 }).default("0.00"),
   ratingCommunication: decimal("ratingCommunication", { precision: 3, scale: 2 }).default("0.00"),
   ratingScopeChanges: decimal("ratingScopeChanges", { precision: 3, scale: 2 }).default("0.00"),
@@ -97,8 +113,10 @@ export const reviews = mysqlTable("reviews", {
   id: int("id").autoincrement().primaryKey(),
   customerId: int("customerId").notNull(),
   contractorUserId: int("contractorUserId").notNull(),
-  // Overall star rating 1–5
+  // Final published overall rating (0 when wouldWorkAgain=no, otherwise calculated average)
   overallRating: int("overallRating").notNull(),
+  // Raw category average before override (for analytics)
+  calculatedOverallRating: decimal("calculatedOverallRating", { precision: 3, scale: 2 }),
   // Category ratings 1–5 (new consolidated categories)
   ratingPaymentReliability: int("ratingPaymentReliability").notNull(),
   ratingCommunication: int("ratingCommunication").notNull(),
@@ -106,6 +124,9 @@ export const reviews = mysqlTable("reviews", {
   ratingPropertyRespect: int("ratingPropertyRespect").notNull(),
   ratingPermitPulling: int("ratingPermitPulling").notNull(),
   ratingOverallJobExperience: int("ratingOverallJobExperience").notNull(),
+  // New: normalized categories + wouldWorkAgain stored as JSON (coexists with legacy int cols)
+  categoryDataJson: text("categoryDataJson"),
+  wouldWorkAgain: varchar("wouldWorkAgain", { length: 3 }),
   clientScore: int("clientScore").default(0).notNull(),
   confirmationCount: int("confirmationCount").default(0).notNull(),
   // Review text
@@ -114,10 +135,14 @@ export const reviews = mysqlTable("reviews", {
   jobType: varchar("jobType", { length: 128 }),
   jobDate: varchar("jobDate", { length: 32 }),
   jobAmount: varchar("jobAmount", { length: 32 }),
-  // Red flags (stored as comma-separated string for simplicity)
+  // Flags (red flags stored as comma-separated or JSON, green flags as JSON)
   redFlags: text("redFlags"),
+  greenFlags: text("greenFlags"),
   // Helpful votes
   helpfulCount: int("helpfulCount").default(0).notNull(),
+  moderationStatus: mysqlEnum("moderationStatus", ["active", "hidden_flagged", "under_investigation", "removed"]).default("active").notNull(),
+  hiddenAt: timestamp("hiddenAt"),
+  hiddenByAdminId: int("hiddenByAdminId"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -144,12 +169,27 @@ export const subscriptions = mysqlTable("subscriptions", {
   id: int("id").autoincrement().primaryKey(),
   userId: int("userId").notNull().unique(),
   status: mysqlEnum("status", ["trial", "active", "cancelled", "expired"]).default("trial").notNull(),
+  planType: mysqlEnum("planType", [
+    "verified_contractor_free_year",
+    "contractor_annual",
+    "customer_monthly",
+    "annual_paid",
+    "none",
+  ]).default("none").notNull(),
   trialStartedAt: timestamp("trialStartedAt").defaultNow().notNull(),
   trialEndsAt: timestamp("trialEndsAt").notNull(),
+  freeTrialStartAt: timestamp("freeTrialStartAt"),
+  freeTrialEndAt: timestamp("freeTrialEndAt"),
   subscriptionStartedAt: timestamp("subscriptionStartedAt"),
   subscriptionEndsAt: timestamp("subscriptionEndsAt"),
-  // Stripe: link to Stripe subscription so webhooks can update status
+  nextBillingAmount: decimal("nextBillingAmount", { precision: 8, scale: 2 }),
+  nextBillingDate: timestamp("nextBillingDate"),
+  paymentMethodOnFile: boolean("paymentMethodOnFile").default(false).notNull(),
+  renewalReminderSentAt: timestamp("renewalReminderSentAt"),
+  lastReminderDaysMilestone: int("lastReminderDaysMilestone"),
+  stripeCustomerId: varchar("stripeCustomerId", { length: 255 }),
   stripeSubscriptionId: varchar("stripeSubscriptionId", { length: 255 }),
+  stripeDefaultPaymentMethodId: varchar("stripeDefaultPaymentMethodId", { length: 255 }),
   paymentMethod: varchar("paymentMethod", { length: 64 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -179,11 +219,19 @@ export const reviewDisputes = mysqlTable("review_disputes", {
   id: int("id").autoincrement().primaryKey(),
   reviewId: int("reviewId").notNull(),
   customerId: int("customerId").notNull(),
-  status: mysqlEnum("status", ["open", "responded", "resolved", "dismissed"]).default("open").notNull(),
-  customerResponse: text("customerResponse"), // Customer's written response to the review
+  status: mysqlEnum("status", ["open", "responded", "resolved", "dismissed", "pending", "under_review", "awaiting_info", "rejected"]).default("pending").notNull(),
+  reason: mysqlEnum("dispute_reason", [
+    "incorrect_information",
+    "wrong_individual",
+    "harassment_abuse",
+    "privacy_concern",
+    "outdated_information",
+    "other",
+  ]),
+  customerResponse: text("customerResponse"),
   respondedAt: timestamp("respondedAt"),
   resolvedAt: timestamp("resolvedAt"),
-  resolution: text("resolution"), // Admin/moderator resolution notes
+  resolution: text("resolution"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -885,6 +933,18 @@ export const integrationWebhookReceipts = mysqlTable("integration_webhook_receip
 });
 export type IntegrationWebhookReceipt = typeof integrationWebhookReceipts.$inferSelect;
 
+export const adminAuditLog = mysqlTable("admin_audit_log", {
+  id: int("id").autoincrement().primaryKey(),
+  adminUserId: int("adminUserId").notNull(),
+  action: varchar("action", { length: 128 }).notNull(),
+  targetType: varchar("targetType", { length: 64 }).notNull(),
+  targetId: varchar("targetId", { length: 128 }),
+  details: text("details"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type AdminAuditLog = typeof adminAuditLog.$inferSelect;
+
 export const stripeWebhookEvents = mysqlTable("stripe_webhook_events", {
   id: int("id").autoincrement().primaryKey(),
   stripeEventId: varchar("stripe_event_id", { length: 255 }).notNull().unique(),
@@ -1073,3 +1133,59 @@ export const rateLimitEvents = mysqlTable("rate_limit_events", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type RateLimitEvent = typeof rateLimitEvents.$inferSelect;
+
+/**
+ * Customer responses — customers can respond publicly to reviews about them.
+ * One response per review.
+ */
+export const customerResponses = mysqlTable("customer_responses", {
+  id: int("id").autoincrement().primaryKey(),
+  reviewId: int("reviewId").notNull().unique(),
+  customerUserId: int("customerUserId").notNull(),
+  responseText: text("responseText").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+export type CustomerResponse = typeof customerResponses.$inferSelect;
+export type InsertCustomerResponse = typeof customerResponses.$inferInsert;
+
+/**
+ * Dispute timeline — chat-style thread entries on disputes.
+ */
+export const disputeTimeline = mysqlTable("dispute_timeline", {
+  id: int("id").autoincrement().primaryKey(),
+  disputeId: int("disputeId").notNull(),
+  authorUserId: int("authorUserId"),
+  authorRole: mysqlEnum("authorRole", ["customer", "admin", "system"]).notNull(),
+  entryType: mysqlEnum("entryType", ["message", "status_change", "info_request", "attachment", "resolution"]).notNull(),
+  content: text("content"),
+  attachmentUrl: varchar("attachmentUrl", { length: 512 }),
+  newStatus: varchar("newStatus", { length: 64 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type DisputeTimelineEntry = typeof disputeTimeline.$inferSelect;
+export type InsertDisputeTimelineEntry = typeof disputeTimeline.$inferInsert;
+
+/**
+ * Review flag requests — public users flag reviews for admin evaluation.
+ */
+export const reviewFlagRequests = mysqlTable("review_flag_requests", {
+  id: int("id").autoincrement().primaryKey(),
+  reviewId: int("reviewId").notNull(),
+  reporterUserId: int("reporterUserId"),
+  reason: mysqlEnum("reason", [
+    "incorrect_information",
+    "wrong_individual",
+    "harassment_abuse",
+    "privacy_concern",
+    "outdated_information",
+    "other",
+  ]).notNull(),
+  details: text("details"),
+  photoUrl: varchar("photoUrl", { length: 512 }),
+  legalAccepted: boolean("legalAccepted").default(false).notNull(),
+  status: mysqlEnum("status", ["pending", "under_review", "resolved", "dismissed"]).default("pending").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type ReviewFlagRequest = typeof reviewFlagRequests.$inferSelect;
+export type InsertReviewFlagRequest = typeof reviewFlagRequests.$inferInsert;

@@ -1,8 +1,12 @@
 import Stripe from "stripe";
 
-const stripeSecretKey = process.env.STRIPE_SECRET_KEY || "sk_test_placeholder";
+const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
 
-export const stripe = new Stripe(stripeSecretKey);
+if (!stripeSecretKey) {
+  console.warn("[Stripe] STRIPE_SECRET_KEY not set. Payment features will be unavailable.");
+}
+
+export const stripe = stripeSecretKey ? new Stripe(stripeSecretKey) : (null as unknown as Stripe);
 
 /**
  * Create a payment intent for subscription upgrade

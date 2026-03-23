@@ -1,5 +1,6 @@
 import { ScrollView, StyleSheet, Text, View, Pressable } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
+import { ScreenBackground } from "@/components/screen-background";
 import { useColors } from "@/hooks/use-colors";
 import { trpc } from "@/lib/trpc";
 import { useFocusEffect } from "@react-navigation/native";
@@ -49,7 +50,8 @@ export default function AnalyticsScreen() {
     .slice(0, 5);
 
   return (
-    <ScreenContainer className="p-4">
+    <ScreenBackground backgroundKey="analytics">
+    <ScreenContainer className="p-4" containerClassName="bg-transparent">
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.header}>
@@ -149,18 +151,109 @@ export default function AnalyticsScreen() {
           </View>
         )}
 
-        {/* Reputation Score Explanation */}
-        <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>How It Works</Text>
-          <Text style={[styles.explanation, { color: colors.muted }]}>
-            Your reputation score is calculated from your average overall rating across all reviews. A higher score means contractors are more likely to work with you.
+        {/* ── Client Score System ─────────────────────────────── */}
+        <View style={styles.scoreSystemHeader}>
+          <Text style={[styles.scoreSystemTitle, { color: colors.foreground }]}>Your Client Score</Text>
+          <Text style={[styles.scoreSystemSubtitle, { color: colors.muted }]}>
+            Think of this like a credit score — but for how contractors experience working with you.
           </Text>
-          <Text style={[styles.explanation, { color: colors.muted, marginTop: 8 }]}>
-            Your dispute response rate shows how often you respond to customer disputes. Higher rates demonstrate professionalism and commitment to resolution.
+        </View>
+
+        {/* Section 1: How It's Calculated */}
+        <View style={[styles.csCard, { backgroundColor: colors.surface, borderColor: "rgba(255,255,255,0.06)" }]}>
+          <Text style={[styles.csCardTitle, { color: colors.foreground }]}>How Your Score Is Calculated</Text>
+          <Text style={[styles.csBody, { color: colors.muted }]}>
+            Your Client Score ranges from 0–100 and is built from real contractor reviews.
           </Text>
+          <Text style={[styles.csSubhead, { color: colors.foreground }]}>Your score is influenced by:</Text>
+          <View style={styles.csBullets}>
+            <Text style={[styles.csBullet, { color: colors.muted }]}>• Payment behavior (on-time vs slow or disputed)</Text>
+            <Text style={[styles.csBullet, { color: colors.muted }]}>• Communication and responsiveness</Text>
+            <Text style={[styles.csBullet, { color: colors.muted }]}>• Scope control (avoiding constant changes)</Text>
+            <Text style={[styles.csBullet, { color: colors.muted }]}>• Jobsite readiness and conditions</Text>
+            <Text style={[styles.csBullet, { color: colors.muted }]}>• Professionalism and respect</Text>
+            <Text style={[styles.csBullet, { color: colors.muted }]}>• "Would Work Again" decisions</Text>
+            <Text style={[styles.csBullet, { color: colors.muted }]}>• Red flags reported by contractors</Text>
+          </View>
+          <View style={[styles.csNote, { borderTopColor: "rgba(255,255,255,0.06)" }]}>
+            <Text style={[styles.csNoteText, { color: colors.muted }]}>
+              Recent reviews carry more weight than older ones.{"\n"}Consistent behavior matters — patterns raise or lower your score over time.
+            </Text>
+          </View>
+        </View>
+
+        {/* Section 2: What Affects Most */}
+        <View style={[styles.csCard, { backgroundColor: colors.surface, borderColor: "rgba(255,255,255,0.06)" }]}>
+          <Text style={[styles.csCardTitle, { color: colors.foreground }]}>What Affects Your Score Most</Text>
+
+          <Text style={[styles.csImpactLabel, { color: "#DC2626" }]}>Major Negative Impacts</Text>
+          <View style={styles.csBullets}>
+            <Text style={[styles.csBullet, { color: "#DC2626" }]}>🚨 "Would NOT Work Again"</Text>
+            <Text style={[styles.csBullet, { color: "#DC2626" }]}>🚨 Do Not Work With flag</Text>
+            <Text style={[styles.csBullet, { color: "#DC2626" }]}>🚨 Payment disputes or non-payment</Text>
+            <Text style={[styles.csBullet, { color: "#DC2626" }]}>🚨 Legal threats or chargeback behavior</Text>
+          </View>
+
+          <Text style={[styles.csImpactLabel, { color: colors.warning }]}>Moderate Negative Impacts</Text>
+          <View style={styles.csBullets}>
+            <Text style={[styles.csBullet, { color: colors.muted }]}>• Repeated scope creep</Text>
+            <Text style={[styles.csBullet, { color: colors.muted }]}>• Slow payments</Text>
+            <Text style={[styles.csBullet, { color: colors.muted }]}>• Poor communication</Text>
+            <Text style={[styles.csBullet, { color: colors.muted }]}>• Delayed decisions</Text>
+          </View>
+
+          <Text style={[styles.csImpactLabel, { color: "#22C55E" }]}>Positive Impacts</Text>
+          <View style={styles.csBullets}>
+            <Text style={[styles.csBullet, { color: "#22C55E" }]}>✅ Fast, reliable payment</Text>
+            <Text style={[styles.csBullet, { color: "#22C55E" }]}>✅ Clear communication</Text>
+            <Text style={[styles.csBullet, { color: "#22C55E" }]}>✅ Respectful jobsite behavior</Text>
+            <Text style={[styles.csBullet, { color: "#22C55E" }]}>✅ Contractors willing to work with you again</Text>
+          </View>
+        </View>
+
+        {/* Section 3: Why It Matters */}
+        <View style={[styles.csCard, { backgroundColor: colors.surface, borderColor: "rgba(255,255,255,0.06)" }]}>
+          <Text style={[styles.csCardTitle, { color: colors.foreground }]}>Why It Matters</Text>
+          <Text style={[styles.csBody, { color: colors.muted }]}>
+            Your score directly affects how likely contractors are to accept your job.
+          </Text>
+
+          <View style={[styles.csImpactBox, { backgroundColor: "#22C55E0C", borderColor: "#22C55E33" }]}>
+            <Text style={[styles.csImpactBoxTitle, { color: "#22C55E" }]}>Higher Score</Text>
+            <Text style={[styles.csImpactBoxItem, { color: "#22C55E" }]}>• More contractors willing to work with you</Text>
+            <Text style={[styles.csImpactBoxItem, { color: "#22C55E" }]}>• Faster responses</Text>
+            <Text style={[styles.csImpactBoxItem, { color: "#22C55E" }]}>• Better pricing opportunities</Text>
+          </View>
+
+          <View style={[styles.csImpactBox, { backgroundColor: "#DC26260C", borderColor: "#DC262633" }]}>
+            <Text style={[styles.csImpactBoxTitle, { color: "#DC2626" }]}>Lower Score</Text>
+            <Text style={[styles.csImpactBoxItem, { color: "#DC2626" }]}>• Contractors may decline work</Text>
+            <Text style={[styles.csImpactBoxItem, { color: "#DC2626" }]}>• Limited interest or slower responses</Text>
+            <Text style={[styles.csImpactBoxItem, { color: "#DC2626" }]}>• Increased scrutiny before accepting jobs</Text>
+          </View>
+        </View>
+
+        {/* Section 4: Disputes */}
+        <View style={[styles.csCard, { backgroundColor: colors.surface, borderColor: "rgba(255,255,255,0.06)" }]}>
+          <Text style={[styles.csCardTitle, { color: colors.foreground }]}>Disputes & Accountability</Text>
+          <View style={styles.csBullets}>
+            <Text style={[styles.csBody, { color: colors.muted }]}>
+              You can dispute reviews you believe are inaccurate.
+            </Text>
+            <Text style={[styles.csBody, { color: colors.muted }]}>
+              Your dispute response rate reflects how often you respond and resolve issues.
+            </Text>
+            <Text style={[styles.csBody, { color: "#22C55E" }]}>
+              Fast, professional responses improve your standing.
+            </Text>
+            <Text style={[styles.csBody, { color: "#DC2626" }]}>
+              Ignoring disputes or repeated issues can lower your score further.
+            </Text>
+          </View>
         </View>
       </ScrollView>
     </ScreenContainer>
+    </ScreenBackground>
   );
 }
 
@@ -256,5 +349,86 @@ const styles = StyleSheet.create({
   explanation: {
     fontSize: 13,
     lineHeight: 18,
+  },
+
+  scoreSystemHeader: {
+    paddingVertical: 8,
+    gap: 6,
+  },
+  scoreSystemTitle: {
+    fontSize: 24,
+    fontWeight: "800",
+    letterSpacing: -0.5,
+  },
+  scoreSystemSubtitle: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontStyle: "italic",
+  },
+
+  csCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 20,
+    gap: 14,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  csCardTitle: {
+    fontSize: 17,
+    fontWeight: "800",
+    letterSpacing: -0.2,
+  },
+  csSubhead: {
+    fontSize: 14,
+    fontWeight: "700",
+    marginTop: 2,
+  },
+  csBody: {
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  csBullets: {
+    gap: 5,
+    paddingLeft: 4,
+  },
+  csBullet: {
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  csNote: {
+    borderTopWidth: 1,
+    paddingTop: 12,
+    marginTop: 2,
+  },
+  csNoteText: {
+    fontSize: 12,
+    lineHeight: 18,
+    fontStyle: "italic",
+  },
+  csImpactLabel: {
+    fontSize: 13,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+    textTransform: "uppercase",
+    marginTop: 4,
+  },
+  csImpactBox: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 14,
+    gap: 4,
+  },
+  csImpactBoxTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    marginBottom: 4,
+  },
+  csImpactBoxItem: {
+    fontSize: 13,
+    lineHeight: 19,
   },
 });

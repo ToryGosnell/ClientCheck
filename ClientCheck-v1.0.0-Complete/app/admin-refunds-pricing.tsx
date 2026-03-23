@@ -182,7 +182,7 @@ export default function AdminRefundsPricingScreen() {
       <Text style={[styles.cardDetail, { color: colors.muted }]}>
         {item.reason}
       </Text>
-      {item.validUntil && (
+      {!!item.validUntil && (
         <Text style={[styles.cardDate, { color: colors.muted }]}>
           Valid until: {item.validUntil}
         </Text>

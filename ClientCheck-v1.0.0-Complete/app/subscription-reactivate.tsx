@@ -165,7 +165,7 @@ export default function SubscriptionReactivateScreen() {
                 </View>
               )}
             </View>
-            <Text style={[styles.planPrice, { color: colors.primary }]}>$100</Text>
+            <Text style={[styles.planPrice, { color: colors.primary }]}>$120</Text>
             <Text style={[styles.planFrequency, { color: colors.muted }]}>/year</Text>
             <Text style={[styles.planDescription, { color: colors.muted }]}>
               Non-refundable. Best value for committed users.

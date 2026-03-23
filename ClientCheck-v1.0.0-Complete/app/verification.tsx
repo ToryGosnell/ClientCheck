@@ -81,7 +81,7 @@ export default function VerificationScreen() {
             <Text style={styles.statusText}>
               Status: {status.status.charAt(0).toUpperCase() + status.status.slice(1)}
             </Text>
-            {status.notes && (
+            {!!status.notes && (
               <Text style={[styles.statusNotes, { color: colors.foreground }]}>
                 {status.notes}
               </Text>

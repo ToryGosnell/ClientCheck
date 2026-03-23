@@ -247,7 +247,7 @@ export default function CustomerDetailPrivateScreen() {
                 </Text>
               </View>
 
-              {customer.email && (
+              {!!customer.email && (
                 <>
                   <View style={[styles.divider, { backgroundColor: colors.border }]} />
 

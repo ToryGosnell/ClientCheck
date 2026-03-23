@@ -7,8 +7,11 @@ import {
   getModeratorStats,
   DisputeDecision,
 } from "../services/dispute-moderation-service";
+import { attachSessionAuth, requireRole } from "../services/authz";
 
 const router = Router();
+router.use(attachSessionAuth);
+router.use(requireRole(["admin"]));
 
 /**
  * GET /api/disputes/moderation/stats

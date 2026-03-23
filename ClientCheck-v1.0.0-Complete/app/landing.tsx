@@ -4,13 +4,17 @@ import { ScreenContainer } from "@/components/screen-container";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 
+function openAccount(router: ReturnType<typeof useRouter>, preset: "contractor" | "customer") {
+  router.push({ pathname: "/select-account", params: { preset } } as never);
+}
+
 export default function LandingScreen() {
   const router = useRouter();
   const [qrCode, setQrCode] = useState<string | null>(null);
 
   useEffect(() => {
     // Generate QR code URL (using a QR code API)
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent("https://contractorvet.app/download")}`;
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent("https://clientcheck.app/download")}`;
     setQrCode(qrUrl);
   }, []);
 
@@ -30,70 +34,106 @@ export default function LandingScreen() {
           {/* Hero Section */}
           <View className="items-center gap-4 mt-4">
             <Text className="text-5xl font-bold text-white text-center">
-              Know Your Customers
+              Contractor risk intelligence
             </Text>
-            <Text className="text-xl text-blue-200 text-center">
-              Before you accept the job
+            <Text className="text-xl text-blue-200 text-center px-2">
+              Documented contractor experiences for informed job decisions — plus a fair path for customers to respond and dispute.
             </Text>
           </View>
 
-          {/* Problem Section */}
-          <View className="bg-red-900/30 border border-red-500/50 rounded-2xl p-6 gap-4">
-            <Text className="text-2xl font-bold text-white">The Problem</Text>
+          {/* Account entry — compact, premium */}
+          <View className="bg-slate-800/60 border border-slate-600/50 rounded-2xl p-5 gap-4">
+            <Text className="text-center text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              Sign in or create an account
+            </Text>
+            <Text className="text-center text-xs text-slate-500 -mt-2">
+              Same secure sign-in for new and returning users
+            </Text>
+            <View className="gap-2">
+              <Text className="text-sm font-bold text-slate-300">Contractors</Text>
+              <Pressable
+                onPress={() => { handlePress(); openAccount(router, "contractor"); }}
+                className="bg-blue-600/90 rounded-xl py-3.5 items-center border border-blue-400/30"
+                style={({ pressed }) => ({ opacity: pressed ? 0.88 : 1 })}
+              >
+                <Text className="text-white font-bold text-base">Contractor sign in</Text>
+              </Pressable>
+              <Text className="text-center text-xs text-slate-500 -mt-1">
+                New or returning — same secure sign-in
+              </Text>
+            </View>
+            <View className="gap-2">
+              <Text className="text-sm font-bold text-slate-300">Customers</Text>
+              <Pressable
+                onPress={() => { handlePress(); openAccount(router, "customer"); }}
+                className="bg-emerald-700/80 rounded-xl py-3.5 items-center border border-emerald-500/30"
+                style={({ pressed }) => ({ opacity: pressed ? 0.88 : 1 })}
+              >
+                <Text className="text-white font-bold text-base">Customer sign in</Text>
+              </Pressable>
+              <Text className="text-center text-xs text-slate-500 -mt-1">
+                New or returning — same secure sign-in
+              </Text>
+            </View>
+          </View>
+
+          {/* Why it matters */}
+          <View className="bg-slate-800/40 border border-slate-600/40 rounded-2xl p-6 gap-4">
+            <Text className="text-2xl font-bold text-white">Why teams use ClientCheck</Text>
             <View className="gap-3">
               <View className="flex-row gap-3">
-                <Text className="text-2xl">⏰</Text>
+                <Text className="text-2xl">📋</Text>
                 <Text className="flex-1 text-base text-gray-100">
-                  Scope creep wastes your time and money
+                  Go beyond gut feel — see patterns from real jobs before you commit.
                 </Text>
               </View>
               <View className="flex-row gap-3">
-                <Text className="text-2xl">👻</Text>
+                <Text className="text-2xl">✅</Text>
                 <Text className="flex-1 text-base text-gray-100">
-                  Customers ghost you mid-project
-                </Text>
-              </View>
-              <View className="flex-row gap-3">
-                <Text className="text-2xl">💸</Text>
-                <Text className="flex-1 text-base text-gray-100">
-                  Payment disputes cost you thousands
+                  Verified contractor experiences, not anonymous pile-ons.
                 </Text>
               </View>
               <View className="flex-row gap-3">
                 <Text className="text-2xl">⚖️</Text>
                 <Text className="flex-1 text-base text-gray-100">
-                  Unreasonable customers leave bad reviews
-                </Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Solution Section */}
-          <View className="bg-green-900/30 border border-green-500/50 rounded-2xl p-6 gap-4">
-            <Text className="text-2xl font-bold text-white">The Solution</Text>
-            <View className="gap-3">
-              <View className="flex-row gap-3">
-                <Text className="text-2xl">🔍</Text>
-                <Text className="flex-1 text-base text-gray-100">
-                  See customer payment history before accepting
-                </Text>
-              </View>
-              <View className="flex-row gap-3">
-                <Text className="text-2xl">🚨</Text>
-                <Text className="flex-1 text-base text-gray-100">
-                  Get instant alerts during incoming calls
-                </Text>
-              </View>
-              <View className="flex-row gap-3">
-                <Text className="text-2xl">⭐</Text>
-                <Text className="flex-1 text-base text-gray-100">
-                  Read real reviews from other contractors
+                  Customers can access disputes and responses — transparency built in.
                 </Text>
               </View>
               <View className="flex-row gap-3">
                 <Text className="text-2xl">🛡️</Text>
                 <Text className="flex-1 text-base text-gray-100">
-                  Protect your reputation with dispute management
+                  Fair moderation and shared accountability — not a blacklist.
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Platform snapshot */}
+          <View className="bg-emerald-900/25 border border-emerald-500/40 rounded-2xl p-6 gap-4">
+            <Text className="text-2xl font-bold text-white">What you get</Text>
+            <View className="gap-3">
+              <View className="flex-row gap-3">
+                <Text className="text-2xl">🔍</Text>
+                <Text className="flex-1 text-base text-gray-100">
+                  Search and preview risk signals before you accept the job.
+                </Text>
+              </View>
+              <View className="flex-row gap-3">
+                <Text className="text-2xl">🚨</Text>
+                <Text className="flex-1 text-base text-gray-100">
+                  Alerts and call-time context when you need it most.
+                </Text>
+              </View>
+              <View className="flex-row gap-3">
+                <Text className="text-2xl">⭐</Text>
+                <Text className="flex-1 text-base text-gray-100">
+                  Category-level ratings from contractors who did the work.
+                </Text>
+              </View>
+              <View className="flex-row gap-3">
+                <Text className="text-2xl">🤝</Text>
+                <Text className="flex-1 text-base text-gray-100">
+                  Dispute tools so both sides can be heard.
                 </Text>
               </View>
             </View>
@@ -101,10 +141,10 @@ export default function LandingScreen() {
 
           {/* Two-Sided Payment Model Section */}
           <View className="bg-purple-900/30 border border-purple-500/50 rounded-2xl p-6 gap-4">
-            <Text className="text-2xl font-bold text-white">Fair Reviews, Guaranteed</Text>
+            <Text className="text-2xl font-bold text-white">Built for fairness</Text>
             <Text className="text-base text-gray-100 leading-relaxed">
-              Both contractors AND customers pay equally. When both sides have skin in the game,
-              everyone behaves honestly.
+              Contractors and customers both have a stake in accurate, civil reporting. That keeps signal high,
+              reduces bad-faith noise, and makes dispute resolution possible.
             </Text>
             <View className="gap-3 mt-2">
               <View className="flex-row gap-3">
@@ -112,7 +152,7 @@ export default function LandingScreen() {
                 <View className="flex-1">
                   <Text className="font-semibold text-gray-100">Prevents Fake Reviews</Text>
                   <Text className="text-sm text-gray-300">
-                    Cost deters spam and frivolous disputes
+                    Reduces spam and low-effort noise
                   </Text>
                 </View>
               </View>
@@ -121,7 +161,7 @@ export default function LandingScreen() {
                 <View className="flex-1">
                   <Text className="font-semibold text-gray-100">Fair Moderation</Text>
                   <Text className="text-sm text-gray-300">
-                    Both sides fund independent review process
+                    Clear rules and moderation both sides can trust
                   </Text>
                 </View>
               </View>
@@ -156,10 +196,10 @@ export default function LandingScreen() {
             <View className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 gap-2">
               <Text className="text-lg font-semibold text-white">💰 Subscription Plans</Text>
               <Text className="text-sm text-gray-300">
-                Contractors: 90-day free trial, then $9.99/month or $100/year
+                Contractors: 12 months free to start, then $120/year — or monthly options in app.
               </Text>
               <Text className="text-sm text-gray-300">
-                Customers: $9.99/month or $100/year (same fair price)
+                Customers: free accounts to view and dispute; paid options where required for disputes (see app).
               </Text>
             </View>
             <View className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 gap-2">
@@ -172,9 +212,9 @@ export default function LandingScreen() {
 
           {/* Pricing Section */}
           <View className="gap-4">
-            <Text className="text-2xl font-bold text-white">Pricing (Same for Everyone)</Text>
+            <Text className="text-2xl font-bold text-white">Simple contractor pricing</Text>
             <Text className="text-sm text-gray-300 text-center">
-              Contractors and customers pay equally. No special treatment, no unfair advantage.
+              Start with a full year on us; renew at $120/year when you are ready. No surprise charges — reminders before renewal.
             </Text>
             <View className="flex-row gap-3">
               <View className="flex-1 bg-blue-600/50 border border-blue-400 rounded-xl p-4 gap-2">
@@ -184,7 +224,7 @@ export default function LandingScreen() {
               </View>
               <View className="flex-1 bg-green-600/50 border border-green-400 rounded-xl p-4 gap-2">
                 <Text className="text-lg font-bold text-white">Yearly</Text>
-                <Text className="text-3xl font-bold text-white">$100</Text>
+                <Text className="text-3xl font-bold text-white">$120</Text>
                 <Text className="text-xs text-green-200">/year (save 17%)</Text>
               </View>
             </View>
@@ -210,7 +250,7 @@ export default function LandingScreen() {
             <Pressable
               onPress={() => {
                 handlePress();
-                router.push("/(tabs)");
+                openAccount(router, "contractor");
               }}
               style={({ pressed }) => [
                 {
@@ -220,11 +260,15 @@ export default function LandingScreen() {
               ]}
               className="bg-blue-600 rounded-xl py-4 items-center"
             >
-              <Text className="text-white font-bold text-lg">Start Free Trial</Text>
+              <Text className="text-white font-bold text-lg">Start free — 12 months</Text>
+              <Text className="text-blue-100 text-xs mt-1">Then $120/year · No card to start</Text>
             </Pressable>
 
             <Pressable
-              onPress={() => openLink("https://contractorvet.app")}
+              onPress={() => {
+                handlePress();
+                router.push("/(tabs)");
+              }}
               style={({ pressed }) => [
                 {
                   opacity: pressed ? 0.8 : 1,
@@ -233,26 +277,39 @@ export default function LandingScreen() {
               ]}
               className="bg-slate-700 rounded-xl py-4 items-center"
             >
-              <Text className="text-white font-bold text-lg">Learn More</Text>
+              <Text className="text-white font-bold text-lg">Browse the app</Text>
+            </Pressable>
+
+            <Pressable
+              onPress={() => openLink("https://clientcheck.app")}
+              style={({ pressed }) => [
+                {
+                  opacity: pressed ? 0.8 : 1,
+                  transform: [{ scale: pressed ? 0.97 : 1 }],
+                },
+              ]}
+              className="bg-transparent border border-slate-500 rounded-xl py-3.5 items-center"
+            >
+              <Text className="text-slate-200 font-semibold">Learn more on the web</Text>
             </Pressable>
           </View>
 
           {/* Footer */}
           <View className="items-center gap-2 pb-4">
             <Text className="text-xs text-gray-400">
-              Contractors: No credit card for trial • Cancel anytime
+              Contractors: 12 months free • $120/year after • Cancel anytime
             </Text>
             <Text className="text-xs text-gray-400">
-              Customers: Fair pricing • Transparent moderation • Honest reviews
+              Customers: Free accounts • Disputes & transparency • Fair process
             </Text>
             <View className="flex-row gap-4 mt-2">
-              <Pressable onPress={() => openLink("https://contractorvet.app/privacy")}>
+              <Pressable onPress={() => openLink("https://clientcheck.app/privacy")}>
                 <Text className="text-xs text-blue-400">Privacy</Text>
               </Pressable>
-              <Pressable onPress={() => openLink("https://contractorvet.app/terms")}>
+              <Pressable onPress={() => openLink("https://clientcheck.app/terms")}>
                 <Text className="text-xs text-blue-400">Terms</Text>
               </Pressable>
-              <Pressable onPress={() => openLink("https://contractorvet.app/contact")}>
+              <Pressable onPress={() => openLink("https://clientcheck.app/contact")}>
                 <Text className="text-xs text-blue-400">Contact</Text>
               </Pressable>
             </View>

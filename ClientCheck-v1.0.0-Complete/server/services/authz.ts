@@ -17,18 +17,29 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
-export function attachMockAuth(req: AuthenticatedRequest, _res: Response, next: NextFunction) {
-  const userId = req.header("x-user-id");
-  const role = req.header("x-user-role") as AppRole | undefined;
-  if (userId) {
-    req.auth = {
-      ...(req.auth || {}),
-      userId: Number(userId),
-      role: role || "contractor",
-    };
+/**
+ * Authenticate via session cookie / Bearer token.
+ * Falls through without setting req.auth if no valid session exists.
+ */
+export async function attachSessionAuth(req: AuthenticatedRequest, _res: Response, next: NextFunction) {
+  try {
+    const { sdk } = await import("../_core/sdk");
+    const user = await sdk.authenticateRequest(req);
+    if (user) {
+      req.auth = {
+        ...(req.auth || {}),
+        userId: user.id,
+        role: (user as any).role || "contractor",
+      };
+    }
+  } catch {
+    // No valid session — continue without auth
   }
   next();
 }
+
+/** @deprecated Use attachSessionAuth instead */
+export const attachMockAuth = attachSessionAuth;
 
 export function requireRole(roles: AppRole[]) {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {

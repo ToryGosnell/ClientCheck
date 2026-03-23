@@ -179,10 +179,11 @@ export default function AdminDashboardScreen() {
               <Pressable
                 onPress={() => {
                   handlePress();
+                  router.push("/admin-verification" as never);
                 }}
                 className="flex-1 bg-primary rounded-lg py-3 items-center"
               >
-                <Text className="text-white font-semibold">⚙️ Settings</Text>
+                <Text className="text-white font-semibold">📋 Licenses</Text>
               </Pressable>
               <Pressable
                 onPress={() => {

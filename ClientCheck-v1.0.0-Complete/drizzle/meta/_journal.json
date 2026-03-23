@@ -78,6 +78,55 @@
       "when": 1773363331028,
       "tag": "0010_goofy_dragon_man",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1773364000000,
+      "tag": "0011_platform_scale_up",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1773365000000,
+      "tag": "0012_clientcheck_platform_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1773366000000,
+      "tag": "0015_network_value_expansion",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1773367000000,
+      "tag": "0016_enterprise_operating_system",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "5",
+      "when": 1773368000000,
+      "tag": "0017_production_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "5",
+      "when": 1773369000000,
+      "tag": "0018_full_stack_completion",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1773370000000,
+      "tag": "0019_legal_acceptance",
+      "breakpoints": true
     }
   ]
 }

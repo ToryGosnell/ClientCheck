@@ -109,7 +109,7 @@ export async function handleCustomerSubscriptionDeleted(subscription: Stripe.Sub
 }
 
 export async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
-  const userId = Number((invoice.parent as any)?.subscription_details?.metadata?.userId || invoice.subscription_details?.metadata?.userId || invoice.metadata?.userId);
+  const userId = Number((invoice as any).parent?.subscription_details?.metadata?.userId || (invoice as any).subscription_details?.metadata?.userId || invoice.metadata?.userId);
   if (!userId) return;
   await upsertSubscriptionState(userId, {
     status: 'expired',

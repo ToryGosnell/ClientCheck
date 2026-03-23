@@ -4,6 +4,22 @@ import { getUserByOpenId, upsertUser } from "../db";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
 
+/** Where to send the browser after web OAuth cookie is set. Never default to localhost in production. */
+function oauthWebSuccessRedirectUrl(): string {
+  const trim = (s: string | undefined) => (s ?? "").trim().replace(/\/$/, "");
+  const explicit =
+    trim(process.env.OAUTH_WEB_REDIRECT_URL) ||
+    trim(process.env.FRONTEND_URL) ||
+    trim(process.env.APP_BASE_URL);
+  if (explicit) return explicit;
+  const preview = trim(process.env.EXPO_WEB_PREVIEW_URL) || trim(process.env.EXPO_PACKAGER_PROXY_URL);
+  if (preview) return preview;
+  if (process.env.NODE_ENV !== "production") return "http://localhost:8081";
+  return trim(process.env.RAILWAY_PUBLIC_DOMAIN)
+    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+    : "https://clientcheck-production.up.railway.app";
+}
+
 function getQueryParam(req: Request, key: string): string | undefined {
   const value = req.query[key];
   return typeof value === "string" ? value : undefined;
@@ -83,12 +99,7 @@ export function registerOAuthRoutes(app: Express) {
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
 
-      // Redirect to the frontend URL (Expo web on port 8081)
-      // Cookie is set with parent domain so it works across both 3000 and 8081 subdomains
-      const frontendUrl =
-        process.env.EXPO_WEB_PREVIEW_URL ||
-        process.env.EXPO_PACKAGER_PROXY_URL ||
-        "http://localhost:8081";
+      const frontendUrl = oauthWebSuccessRedirectUrl();
       res.redirect(302, frontendUrl);
     } catch (error) {
       console.error("[OAuth] Callback failed", error);
@@ -139,8 +150,8 @@ export function registerOAuthRoutes(app: Express) {
     try {
       const user = await sdk.authenticateRequest(req);
       res.json({ user: buildUserResponse(user) });
-    } catch (error) {
-      console.error("[Auth] /api/auth/me failed:", error);
+    } catch {
+      // Expected when no session exists — not an error worth logging
       res.status(401).json({ error: "Not authenticated", user: null });
     }
   });

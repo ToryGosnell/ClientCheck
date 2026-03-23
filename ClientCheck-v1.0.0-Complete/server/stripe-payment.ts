@@ -29,7 +29,7 @@ export async function createSubscriptionPaymentIntent(
       amount: amountCents,
       currency: "usd",
       payment_method_types: ["card"],
-      description: `Contractor Black List Monthly Subscription - User ${userId}`,
+      description: `ClientCheck Subscription - User ${userId}`,
       receipt_email: userEmail,
       metadata: {
         userId: String(userId),
@@ -189,7 +189,8 @@ export async function createCustomerPaymentIntentForApp(data: {
   stripeCustomerId: string;
   amountCents: number;
   plan: "monthly" | "yearly";
-}): Promise<{ clientSecret: string } | { error: string }> {
+  userId?: number;
+}): Promise<{ clientSecret: string; paymentIntentId: string } | { error: string }> {
   if (!stripe) {
     return { error: "Stripe not configured" };
   }
@@ -199,8 +200,12 @@ export async function createCustomerPaymentIntentForApp(data: {
       currency: "usd",
       customer: data.stripeCustomerId,
       payment_method_types: ["card"],
+      setup_future_usage: "off_session",
       description: `ClientCheck ${data.plan} subscription`,
-      metadata: { plan: data.plan },
+      metadata: {
+        plan: data.plan,
+        ...(data.userId && { userId: String(data.userId) }),
+      },
     });
     const clientSecret = paymentIntent.client_secret;
     if (!clientSecret) return { error: "No client secret" };
@@ -220,6 +225,7 @@ export async function createCustomerSubscriptionForApp(data: {
   plan: "monthly" | "yearly";
   paymentMethodId?: string;
   paymentIntentId?: string;
+  userId?: number;
 }): Promise<{ subscriptionId: string } | { error: string }> {
   if (!stripe) {
     return { error: "Stripe not configured" };
@@ -234,25 +240,25 @@ export async function createCustomerSubscriptionForApp(data: {
       return { error: "Could not get payment method from payment" };
     }
   }
-  const priceId =
-    process.env.STRIPE_PRICE_ID_MONTHLY && process.env.STRIPE_PRICE_ID_YEARLY
-      ? data.plan === "monthly"
-        ? process.env.STRIPE_PRICE_ID_MONTHLY
-        : process.env.STRIPE_PRICE_ID_YEARLY
-      : null;
+  const { getStripePriceId } = await import("../shared/billing-config");
+  const planKey = data.plan === "monthly" ? "customer_monthly" as const : "contractor_annual" as const;
+  const priceId = getStripePriceId(planKey);
   if (!priceId) {
-    return { subscriptionId: `sub_${Date.now()}` };
+    return { error: "Stripe price IDs not configured. Check billing-config.ts or set STRIPE_PRICE_ID_MONTHLY / STRIPE_PRICE_ID_YEARLY." };
   }
   try {
     const sub = await stripe.subscriptions.create({
       customer: data.stripeCustomerId,
       items: [{ price: priceId }],
       ...(paymentMethodId && { default_payment_method: paymentMethodId }),
-      metadata: { plan: data.plan },
+      metadata: {
+        plan: data.plan,
+        ...(data.userId && { userId: String(data.userId) }),
+      },
     });
     return { subscriptionId: sub.id };
   } catch (err) {
     console.error("[Stripe] createCustomerSubscriptionForApp:", err);
-    return { subscriptionId: `sub_${Date.now()}` };
+    return { error: "Failed to create subscription. Please try again." };
   }
 }

@@ -2,6 +2,7 @@ import { View, Text, TouchableOpacity, ScrollView } from "react-native";
 import { useRouter } from "expo-router";
 import { ScreenContainer } from "@/components/screen-container";
 import { useColors } from "@/hooks/use-colors";
+import { startOAuthLogin } from "@/constants/oauth";
 
 export default function Onboarding3Screen() {
   const colors = useColors();
@@ -75,7 +76,7 @@ export default function Onboarding3Screen() {
           {/* CTAs */}
           <View className="gap-3">
             <TouchableOpacity
-              onPress={() => router.push("/oauth/callback" as never)}
+              onPress={() => startOAuthLogin()}
               className="w-full py-4 rounded-lg items-center justify-center"
               style={{ backgroundColor: colors.primary }}
               activeOpacity={0.8}

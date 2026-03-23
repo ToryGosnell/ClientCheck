@@ -1,0 +1,88 @@
+{
+  "plugins": {
+    "stripe": {
+      "enabled": true
+    },
+    "clerk": {
+      "enabled": true
+    },
+    "vercel": {
+      "enabled": true
+    },
+    "deploy-on-aws": {
+      "enabled": true
+    },
+    "posthog": {
+      "enabled": true
+    },
+    "sentry": {
+      "enabled": true
+    },
+    "figma": {
+      "enabled": true
+    },
+    "firecrawl": {
+      "enabled": true
+    },
+    "superpowers": {
+      "enabled": true
+    },
+    "amplitude": {
+      "enabled": true
+    },
+    "1password": {
+      "enabled": true
+    },
+    "semgrep-plugin": {
+      "enabled": true
+    },
+    "datadog": {
+      "enabled": true
+    },
+    "linear": {
+      "enabled": true
+    },
+    "cloudflare": {
+      "enabled": true
+    },
+    "atlassian": {
+      "enabled": true
+    },
+    "planetscale": {
+      "enabled": true
+    },
+    "huggingface-skills": {
+      "enabled": true
+    },
+    "launchdarkly": {
+      "enabled": true
+    },
+    "notion-workspace": {
+      "enabled": true
+    },
+    "glean": {
+      "enabled": true
+    },
+    "zapier": {
+      "enabled": true
+    },
+    "browse": {
+      "enabled": true
+    },
+    "snyk-secure-development": {
+      "enabled": true
+    },
+    "runlayer": {
+      "enabled": true
+    },
+    "langfuse": {
+      "enabled": true
+    },
+    "webflow": {
+      "enabled": true
+    },
+    "wix": {
+      "enabled": true
+    }
+  }
+}
