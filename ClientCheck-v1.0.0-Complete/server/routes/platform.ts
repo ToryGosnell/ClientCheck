@@ -15,12 +15,27 @@ import { attachMockAuth, authenticatePartnerApiKey, persistentRateLimit, require
 import { writeAuditLog } from "../services/audit-log-service";
 import { queueNotification, getNotificationStatus, listNotificationHistory } from "../services/notification-delivery-service";
 import { findPotentialIdentityMatches, mergeCustomers, upsertCustomerIdentityProfile } from "../services/identity-resolution-service";
-import { getDb } from "../db";
+import { getDb, searchCustomersApi } from "../db";
 import { disputeEscalations, integrationUsageEvents, partnerApiKeyRotations, partnerApiKeyScopes, partnerApiKeys, reviewPolicyAcceptances } from "../../drizzle/schema";
 import { createHash, randomBytes } from "crypto";
 
 const router = Router();
 router.use(attachMockAuth);
+
+/** Public customer name search (homepage / search tab) — GET /api/customers?search= */
+router.get("/customers", async (req, res) => {
+  try {
+    const search = String(req.query.search ?? "").trim();
+    if (search.length < 2) {
+      return res.json({ results: [] });
+    }
+    const rows = await searchCustomersApi(search, 500);
+    return res.json({ results: rows });
+  } catch (err) {
+    console.error("[GET /api/customers]", err);
+    return res.status(500).json({ error: "Customer search failed", results: [] });
+  }
+});
 
 const CURRENT_REVIEW_POLICY_VERSION = "2026-03-14";
 

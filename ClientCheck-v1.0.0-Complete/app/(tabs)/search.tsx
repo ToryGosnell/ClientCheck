@@ -194,8 +194,9 @@ export default function SearchScreen() {
   } = useQuery({
     queryKey: ["rest-customers-search", debouncedQuery, selectedState, MAX_RESULTS],
     queryFn: async (): Promise<Customer[]> => {
-      const url = apiUrl(`/customers?search=${encodeURIComponent(debouncedQuery)}`);
-      const res = await fetch(url, { credentials: "include" });
+      const finalUrl = apiUrl(`/api/customers?search=${encodeURIComponent(debouncedQuery)}`);
+      console.log("SEARCH URL", finalUrl);
+      const res = await fetch(finalUrl, { credentials: "include" });
       const text = await res.text();
       let data: { results?: unknown[]; error?: string } = {};
       try {
@@ -583,7 +584,7 @@ export default function SearchScreen() {
                           <Text key="t9" style={st.debugText}>{`displayResultsCount: ${displayResultsCount}`}</Text>,
                           <Text key="t10" style={st.debugText}>{`flatListShouldRender: ${String(flatListShouldRender)}`}</Text>,
                           <Text key="t11" style={st.debugText}>{`karenLikeInRaw: ${karenLikeInRaw}`}</Text>,
-                          <Text key="t12" style={st.debugText}>{`restSearch: ${apiUrl(`/customers?search=${encodeURIComponent(debouncedQuery || "…")}`)}`}</Text>,
+                          <Text key="t12" style={st.debugText}>{`restSearch: ${apiUrl(`/api/customers?search=${encodeURIComponent(debouncedQuery || "…")}`)}`}</Text>,
                           isSearchError ? (
                             <Text key="t13" style={st.debugText}>{`restErr: ${formatRestSearchError(restError)}`}</Text>
                           ) : null,
@@ -690,7 +691,7 @@ export default function SearchScreen() {
                         </Pressable>,
                         __DEV__ ? (
                           <Text key="eu" style={[st.emptyDesc, { color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 8 }]}>
-                            {`GET ${apiUrl(`/customers?search=${encodeURIComponent(debouncedQuery || "")}`)}`}
+                            {`GET ${apiUrl(`/api/customers?search=${encodeURIComponent(debouncedQuery || "")}`)}`}
                           </Text>
                         ) : null,
                       ]}

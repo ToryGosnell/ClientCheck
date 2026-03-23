@@ -3,6 +3,9 @@ import { notifyOwner } from "./notification";
 import { adminProcedure, publicProcedure, router } from "./trpc";
 
 export const systemRouter = router({
+  /** Used by monitors and Railway `healthcheckPath` when calling tRPC HTTP API with batch input */
+  healthcheck: publicProcedure.query(() => ({ status: "ok" as const })),
+
   health: publicProcedure
     .input(
       z.object({

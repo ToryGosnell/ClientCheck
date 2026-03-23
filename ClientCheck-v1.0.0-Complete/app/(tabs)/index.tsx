@@ -117,10 +117,11 @@ export default function HomeScreen() {
         }
       }
 
-      const url = apiUrl(`/api/customers?search=${encodeURIComponent(debouncedLanding)}`);
+      const finalUrl = apiUrl(`/api/customers?search=${encodeURIComponent(debouncedLanding)}`);
+      console.log("SEARCH URL", finalUrl);
       try {
         // Public search: omit credentials avoids cross-site cookie / credentialed-CORS edge cases (localhost → Railway).
-        const res = await fetch(url, { signal: ac.signal, credentials: "omit" });
+        const res = await fetch(finalUrl, { signal: ac.signal, credentials: "omit" });
         const text = await res.text();
         if (ac.signal.aborted) return;
         let data: { results?: unknown[]; error?: string } = {};
@@ -129,7 +130,7 @@ export default function HomeScreen() {
         } catch {
           setHomeSearchError(
             __DEV__
-              ? `HTTP ${res.status} ${res.statusText} — response not JSON. Body: ${text.slice(0, 160)}… | URL: ${url}`
+              ? `HTTP ${res.status} ${res.statusText} — response not JSON. Body: ${text.slice(0, 160)}… | URL: ${finalUrl}`
               : "Search failed. Check your connection and try again.",
           );
           setHomeSearchResults([]);
@@ -138,7 +139,7 @@ export default function HomeScreen() {
         if (!res.ok) {
           setHomeSearchError(
             __DEV__
-              ? `HTTP ${res.status} ${res.statusText}: ${data?.error ?? text.slice(0, 200)} | URL: ${url}`
+              ? `HTTP ${res.status} ${res.statusText}: ${data?.error ?? text.slice(0, 200)} | URL: ${finalUrl}`
               : "Search failed. Check your connection and try again.",
           );
           setHomeSearchResults([]);
@@ -156,7 +157,7 @@ export default function HomeScreen() {
             /failed to fetch|networkerror|load failed|network request failed/i.test(msg)
               ? " (often CORS, offline, or blocked request — check DevTools Network)"
               : "";
-          setHomeSearchError(`Fetch error: ${msg}${corsHint} | API_BASE: ${API_BASE_URL} | URL: ${url}`);
+          setHomeSearchError(`Fetch error: ${msg}${corsHint} | API_BASE: ${API_BASE_URL} | URL: ${finalUrl}`);
         } else {
           setHomeSearchError("Search failed. Check your connection and try again.");
         }
