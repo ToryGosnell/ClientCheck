@@ -2,6 +2,7 @@
   "name": "clientcheck",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "main": "expo-router/entry",
   "overrides": {
     "@react-native/gradle-plugin": "0.83.2",
