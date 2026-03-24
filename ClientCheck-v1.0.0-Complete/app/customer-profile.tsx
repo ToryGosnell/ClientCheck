@@ -54,8 +54,7 @@ export default function CustomerProfileScreen() {
   const loadCustomerProfile = async () => {
     try {
       setLoading(true);
-      // In production, fetch from API
-      // const result = await api.get(`/customers/${customerId}`);
+      // In production, fetch from API via apiUrl(`/customers/${customerId}`) from @/lib/api
       // setCustomer(result.customer);
       // setReviews(result.reviews);
     } catch (error) {

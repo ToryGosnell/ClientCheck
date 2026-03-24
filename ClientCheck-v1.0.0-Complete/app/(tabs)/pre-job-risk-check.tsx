@@ -52,7 +52,7 @@ export default function PreJobRiskCheckScreen() {
     try {
       // Search for customer by name or phone
       const searchResponse = await fetch(
-        apiUrl(`/api/customers/search?query=${encodeURIComponent(searchQuery)}`),
+        apiUrl(`/customers/search?query=${encodeURIComponent(searchQuery)}`),
         { credentials: "include" },
       );
 
@@ -70,7 +70,7 @@ export default function PreJobRiskCheckScreen() {
 
       // Get risk score for first result
       const customer = customers[0];
-      const riskResponse = await fetch(apiUrl(`/api/risk-scores/${customer.id}`), { credentials: "include" });
+      const riskResponse = await fetch(apiUrl(`/risk-scores/${customer.id}`), { credentials: "include" });
 
       if (!riskResponse.ok) {
         throw new Error("Failed to fetch risk score");

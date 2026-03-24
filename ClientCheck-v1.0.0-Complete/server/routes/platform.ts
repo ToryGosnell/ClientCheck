@@ -22,6 +22,13 @@ import { createHash, randomBytes } from "crypto";
 const router = Router();
 router.use(attachMockAuth);
 
+function jsonSafeForCustomerSearch(_key: string, value: unknown): unknown {
+  if (typeof value === "bigint") return Number(value);
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(value)) return value.toString("utf8");
+  return value;
+}
+
 /** Public customer name search (homepage / search tab) — GET /api/customers?search= */
 router.get("/customers", async (req, res) => {
   try {
@@ -30,9 +37,20 @@ router.get("/customers", async (req, res) => {
       return res.json({ results: [] });
     }
     const rows = await searchCustomersApi(search, 500);
-    return res.json({ results: rows });
-  } catch (err) {
-    console.error("[GET /api/customers]", err);
+    const body = JSON.stringify({ results: rows }, jsonSafeForCustomerSearch);
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    return res.status(200).send(body);
+  } catch (error) {
+    console.error("Customer search route error:", error);
+    console.error("[GET /api/customers] Customer search failed — full error:", error);
+    if (error instanceof Error) {
+      console.error("[GET /api/customers] message:", error.message);
+      console.error("[GET /api/customers] stack:\n", error.stack);
+    }
+    const my = error as { code?: string; sqlMessage?: string; errno?: number };
+    if (my?.code || my?.sqlMessage) {
+      console.error("[GET /api/customers] mysql:", { code: my.code, errno: my.errno, sqlMessage: my.sqlMessage });
+    }
     return res.status(500).json({ error: "Customer search failed", results: [] });
   }
 });

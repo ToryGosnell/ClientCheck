@@ -41,7 +41,7 @@ export default function AdminCustomersScreen() {
   const fetchCustomers = async () => {
     try {
       setLoading(true);
-      const response = await apiFetch("/api/admin/customers");
+      const response = await apiFetch("/admin/customers");
 
       if (response.ok) {
         const data = await response.json();

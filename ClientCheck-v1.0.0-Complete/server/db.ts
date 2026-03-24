@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql, { type RowDataPacket } from "mysql2/promise";
+import type { Pool as MysqlCallbackPool } from "mysql2";
 import {
   contractorProfiles,
   customerResponses,
@@ -31,6 +32,22 @@ export async function getDb() {
     }
   }
   return _db;
+}
+
+/**
+ * Use the same mysql2 pool as Drizzle (driver uses createPool({ uri })), so REST search does not
+ * rely on a second pool that might parse DATABASE_URL differently.
+ */
+async function resolveMysqlPromisePool(): Promise<mysql.Pool | null> {
+  const db = await getDb();
+  if (db) {
+    const raw = (db as unknown as { $client?: MysqlCallbackPool }).$client;
+    if (raw && typeof raw.promise === "function") {
+      return raw.promise();
+    }
+    console.error("[db] Drizzle instance has no mysql2 $client; falling back to standalone pool");
+  }
+  return getMysqlPool();
 }
 
 export async function upsertUser(user: InsertUser): Promise<void> {
@@ -206,7 +223,8 @@ let _customersColumnSet: Set<string> | null = null;
 function getMysqlPool(): mysql.Pool | null {
   const url = process.env.DATABASE_URL;
   if (!url) return null;
-  if (!_mysqlPool) _mysqlPool = mysql.createPool(url);
+  // Match drizzle-orm/mysql2 driver: createPool({ uri: connectionString })
+  if (!_mysqlPool) _mysqlPool = mysql.createPool({ uri: url });
   return _mysqlPool;
 }
 
@@ -217,16 +235,72 @@ export function invalidateCustomersColumnCache() {
 
 async function loadCustomersColumnSet(): Promise<Set<string>> {
   if (_customersColumnSet) return _customersColumnSet;
-  const pool = getMysqlPool();
+  const pool = await resolveMysqlPromisePool();
   if (!pool) return new Set();
-  const [rows] = await pool.query<RowDataPacket[]>("SHOW COLUMNS FROM `customers`");
-  _customersColumnSet = new Set(rows.map((r) => String(r.Field)));
-  return _customersColumnSet;
+  try {
+    const [rows] = await pool.query<RowDataPacket[]>("SHOW COLUMNS FROM `customers`");
+    if (!Array.isArray(rows) || rows.length === 0) {
+      console.error("[loadCustomersColumnSet] SHOW COLUMNS returned no rows for `customers`");
+      return new Set();
+    }
+    _customersColumnSet = new Set(
+      rows
+        .map((r) => {
+          const row = r as RowDataPacket & { Field?: unknown; field?: unknown };
+          return String(row.Field ?? row.field ?? "");
+        })
+        .filter(Boolean),
+    );
+    return _customersColumnSet;
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & { code?: string; sqlMessage?: string; sqlState?: string };
+    console.error("[loadCustomersColumnSet] SHOW COLUMNS failed:", err);
+    console.error("[loadCustomersColumnSet] mysql detail:", {
+      code: e.code,
+      errno: e.errno,
+      sqlMessage: e.sqlMessage,
+      sqlState: e.sqlState,
+    });
+    throw err;
+  }
 }
 
+/** Quote a MySQL identifier from information_schema / SHOW COLUMNS (may contain reserved chars). */
 function tickIdent(name: string): string {
-  if (!/^[a-zA-Z0-9_]+$/.test(name)) throw new Error(`Invalid SQL identifier: ${name}`);
-  return `\`${name}\``;
+  const s = String(name);
+  if (!s) throw new Error("Empty SQL identifier");
+  return `\`${s.replace(/`/g, "``")}\``;
+}
+
+/**
+ * Map drizzle logical column names to whatever the live MySQL table actually uses
+ * (camelCase vs snake_case, case differences). Prevents ER_BAD_FIELD_ERROR on SELECT/WHERE/ORDER BY.
+ */
+function resolveDbColumn(cols: Set<string>, logical: string): string | null {
+  if (cols.has(logical)) return logical;
+  const lowerLogical = logical.toLowerCase();
+  for (const c of cols) {
+    if (c.toLowerCase() === lowerLogical) return c;
+  }
+  const snake = logical
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .toLowerCase();
+  if (cols.has(snake)) return snake;
+  for (const c of cols) {
+    if (c.toLowerCase() === snake) return c;
+  }
+  return null;
+}
+
+function alignCustomerRow(row: RowDataPacket, pairs: { logical: string; actual: string }[]): RowDataPacket {
+  const out: RowDataPacket = { ...row };
+  for (const { logical, actual } of pairs) {
+    if (logical !== actual && row[actual] !== undefined) {
+      out[logical] = row[actual];
+    }
+  }
+  return out;
 }
 
 /** Map a DB row to `Customer` for tRPC when the live table has fewer columns than `drizzle/schema`. */
@@ -504,38 +578,119 @@ export async function searchCustomers(query: string, limit = 15, state?: string,
 /**
  * Public customer search for REST GET /api/customers?search=
  * Case-insensitive on name (first, last, full), email, phone; digit match on normalized phone.
+ *
+ * Uses mysql2 + SHOW COLUMNS so we never SELECT or reference fields missing on older DBs
+ * (Drizzle `.select()` without arguments lists every schema column and crashes with ER_BAD_FIELD_ERROR).
  */
 export async function searchCustomersApi(query: string, limit = 500) {
-  const db = await getDb();
-  if (!db) return [];
+  const pool = await resolveMysqlPromisePool();
+  if (!pool) {
+    console.warn("[searchCustomersApi] MySQL pool unavailable (getDb() / DATABASE_URL missing?)");
+    return [];
+  }
   const raw = query.trim();
   if (raw.length < 2) return [];
+
+  const cols = await loadCustomersColumnSet();
+  if (cols.size === 0) {
+    console.warn("[searchCustomersApi] customers table missing or unreadable");
+    return [];
+  }
+
+  const col = (logical: keyof Customer) => resolveDbColumn(cols, String(logical));
+
+  const selectPairs = CUSTOMERS_SELECT_COLUMNS.map((logical) => {
+    const actual = col(logical);
+    return actual ? { logical: String(logical), actual } : null;
+  }).filter((x): x is { logical: string; actual: string } => x != null);
+
+  if (selectPairs.length === 0) {
+    console.warn("[searchCustomersApi] no customer columns matched drizzle names (check naming vs DB)");
+    return [];
+  }
 
   const lowerPattern = `%${raw.toLowerCase()}%`;
   const digits = raw.replace(/\D/g, "");
 
-  const parts = [
-    sql`LOWER(CONCAT(COALESCE(${customers.firstName},''), ' ', COALESCE(${customers.lastName},''))) LIKE ${lowerPattern}`,
-    sql`LOWER(COALESCE(${customers.firstName},'')) LIKE ${lowerPattern}`,
-    sql`LOWER(COALESCE(${customers.lastName},'')) LIKE ${lowerPattern}`,
-    sql`LOWER(COALESCE(${customers.email},'')) LIKE ${lowerPattern}`,
-    sql`LOWER(COALESCE(${customers.phone},'')) LIKE ${lowerPattern}`,
-  ];
-  if (digits.length >= 2) {
-    parts.push(like(customers.normalizedPhone, `%${digits}%`));
+  const orChunks: string[] = [];
+  const params: unknown[] = [];
+
+  const fName = col("firstName");
+  const lName = col("lastName");
+  const emailC = col("email");
+  const phoneC = col("phone");
+  const normPhone = col("normalizedPhone");
+
+  if (fName && lName) {
+    orChunks.push(
+      `LOWER(CONCAT(COALESCE(${tickIdent(fName)},''), ' ', COALESCE(${tickIdent(lName)},''))) LIKE ?`,
+    );
+    params.push(lowerPattern);
+  }
+  if (fName) {
+    orChunks.push(`LOWER(COALESCE(${tickIdent(fName)},'')) LIKE ?`);
+    params.push(lowerPattern);
+  }
+  if (lName) {
+    orChunks.push(`LOWER(COALESCE(${tickIdent(lName)},'')) LIKE ?`);
+    params.push(lowerPattern);
+  }
+  if (emailC) {
+    orChunks.push(`LOWER(COALESCE(${tickIdent(emailC)},'')) LIKE ?`);
+    params.push(lowerPattern);
+  }
+  if (phoneC) {
+    orChunks.push(`LOWER(COALESCE(${tickIdent(phoneC)},'')) LIKE ?`);
+    params.push(lowerPattern);
+  }
+  if (digits.length >= 2 && normPhone) {
+    orChunks.push(`LOWER(TRIM(COALESCE(${tickIdent(normPhone)},''))) LIKE ?`);
+    params.push(`%${digits}%`);
   }
 
-  const results = await db
-    .select()
-    .from(customers)
-    .where(and(eq(customers.isDuplicate, false), or(...parts)))
-    .orderBy(
-      desc(customers.reviewCount),
-      desc(customers.updatedAt),
-    )
-    .limit(Math.min(limit, 500));
+  if (orChunks.length === 0) {
+    console.warn("[searchCustomersApi] no searchable columns resolved (first/last/email/phone/normalizedPhone)");
+    return [];
+  }
 
-  return results;
+  const whereAnd: string[] = [`(${orChunks.join(" OR ")})`];
+  const dupCol = col("isDuplicate");
+  if (dupCol) {
+    const d = tickIdent(dupCol);
+    whereAnd.unshift(`(${d} IS NULL OR ${d} = 0 OR ${d} = FALSE)`);
+  }
+
+  const orderChunks: string[] = [];
+  const rc = col("reviewCount");
+  if (rc) orderChunks.push(`${tickIdent(rc)} DESC`);
+  const ua = col("updatedAt");
+  if (ua) orderChunks.push(`${tickIdent(ua)} DESC`);
+  const idc = col("id");
+  if (orderChunks.length === 0 && idc) orderChunks.push(`${tickIdent(idc)} DESC`);
+
+  const lim = Math.min(Math.max(1, limit), 500);
+  const orderBySql = orderChunks.length ? ` ORDER BY ${orderChunks.join(", ")}` : "";
+  const sqlText = `SELECT ${selectPairs.map((p) => tickIdent(p.actual)).join(", ")} FROM ${tickIdent("customers")} WHERE ${whereAnd.join(" AND ")}${orderBySql} LIMIT ?`;
+  params.push(lim);
+
+  let rows: RowDataPacket[];
+  try {
+    const [r] = await pool.query<RowDataPacket[]>(sqlText, params);
+    rows = Array.isArray(r) ? r : [];
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & { code?: string; sqlMessage?: string; sql?: string; errno?: number };
+    console.error("[searchCustomersApi] SELECT failed:", err);
+    console.error("[searchCustomersApi] mysql detail:", {
+      code: e.code,
+      errno: e.errno,
+      sqlMessage: e.sqlMessage,
+      sql: e.sql,
+    });
+    throw err;
+  }
+  return rows
+    .filter((row): row is RowDataPacket => row != null && typeof row === "object" && !Array.isArray(row))
+    .map((row) => rowToCustomer(alignCustomerRow(row, selectPairs)));
 }
 
 export async function getCustomerById(id: number) {

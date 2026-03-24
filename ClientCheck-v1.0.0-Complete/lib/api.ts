@@ -10,9 +10,16 @@ export const API_BASE_URL = normalizedBase;
  */
 export function ensureApiPrefix(path: string): string {
   if (/^https?:\/\//i.test(path)) return path;
-  const n = path.startsWith("/") ? path : `/${path}`;
-  if (n === "/api" || n.startsWith("/api/")) return n;
-  return `/api${n}`;
+  const q = path.indexOf("?");
+  const h = path.indexOf("#");
+  let end = path.length;
+  if (q >= 0) end = Math.min(end, q);
+  if (h >= 0) end = Math.min(end, h);
+  const pathOnly = path.slice(0, end);
+  const suffix = path.slice(end);
+  const n = pathOnly.startsWith("/") ? pathOnly : `/${pathOnly}`;
+  if (n === "/api" || n.startsWith("/api/")) return `${n}${suffix}`;
+  return `/api${n}${suffix}`;
 }
 
 export function apiUrl(path: string) {

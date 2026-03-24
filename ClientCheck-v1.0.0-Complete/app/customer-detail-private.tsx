@@ -41,7 +41,7 @@ export default function CustomerDetailPrivateScreen() {
   const fetchCustomerData = async () => {
     try {
       setLoading(true);
-      const response = await fetch(apiUrl(`/api/customers/${customerId}`), { credentials: "include" });
+      const response = await fetch(apiUrl(`/customers/${customerId}`), { credentials: "include" });
 
       if (response.ok) {
         const data = await response.json();

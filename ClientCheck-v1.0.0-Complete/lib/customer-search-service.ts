@@ -3,9 +3,13 @@
  * Allows contractors/tradespeople to search and view customer reviews
  */
 
+import { apiUrl } from "@/lib/api";
+
 export interface CustomerSearchResult {
   id: string;
   name: string;
+  /** Two-letter state when returned from API (used by advanced search filter). */
+  state?: string;
   averageRating: number;
   reviewCount: number;
   paymentScore: number;
@@ -42,21 +46,50 @@ export class CustomerSearchService {
    * Search customers by name
    */
   static async searchCustomers(query: string): Promise<CustomerSearchResult[]> {
+    const q = (query ?? "").trim();
+    if (q.length < 2) return [];
+
     try {
-      if (!query || query.trim().length < 2) {
+      const url = apiUrl(`/customers?search=${encodeURIComponent(q)}`);
+      const res = await fetch(url, { credentials: "omit" });
+      const text = await res.text();
+      let data: { results?: Record<string, unknown>[] } = {};
+      try {
+        data = text ? (JSON.parse(text) as { results?: Record<string, unknown>[] }) : {};
+      } catch {
         return [];
       }
-
-      // In production, query database with full-text search
-      // SELECT * FROM customers WHERE name ILIKE '%query%' ORDER BY review_count DESC
-      console.log(`Searching customers for: ${query}`);
-
-      // Mock results
-      return [];
+      if (!res.ok) return [];
+      const rows = Array.isArray(data.results) ? data.results : [];
+      return rows.map((row) => CustomerSearchService.mapApiCustomerRow(row));
     } catch (error) {
       console.error("Failed to search customers:", error);
       return [];
     }
+  }
+
+  private static mapApiCustomerRow(row: Record<string, unknown>): CustomerSearchResult {
+    const risk = row.riskLevel;
+    const riskLevel: CustomerSearchResult["riskLevel"] =
+      risk === "low" || risk === "medium" || risk === "high" ? risk : "medium";
+    const first = row.firstName != null ? String(row.firstName) : "";
+    const last = row.lastName != null ? String(row.lastName) : "";
+    const name = `${first} ${last}`.trim() || "Unknown";
+    return {
+      id: String(row.id ?? ""),
+      name,
+      state: row.state != null && String(row.state).trim() !== "" ? String(row.state).trim() : undefined,
+      averageRating: parseFloat(String(row.overallRating ?? "0")) || 0,
+      reviewCount: Number(row.reviewCount ?? 0),
+      paymentScore: parseFloat(String(row.ratingPaymentReliability ?? "0")) || 0,
+      communicationScore: parseFloat(String(row.ratingCommunication ?? "0")) || 0,
+      scopeScore: parseFloat(String(row.ratingScopeChanges ?? "0")) || 0,
+      professionalismScore: parseFloat(String(row.ratingPropertyRespect ?? "0")) || 0,
+      followupScore: parseFloat(String(row.ratingPermitPulling ?? "0")) || 0,
+      disputeScore: parseFloat(String(row.ratingOverallJobExperience ?? "0")) || 0,
+      redFlags: [],
+      riskLevel,
+    };
   }
 
   /**
@@ -192,17 +225,32 @@ export class CustomerSearchService {
     offset?: number;
   }): Promise<{ results: CustomerSearchResult[]; total: number }> {
     try {
-      // In production, build complex query with filters
-      // SELECT * FROM customers
-      // WHERE (name ILIKE '%query%' OR business_name ILIKE '%query%')
-      // AND avg_rating >= minRating
-      // AND avg_rating <= maxRating
-      // AND review_count >= minReviews
-      // ORDER BY review_count DESC
-      // LIMIT limit OFFSET offset
+      const rawQ = (options.query ?? "").trim();
+      let list =
+        rawQ.length >= 2 ? await CustomerSearchService.searchCustomers(rawQ) : [];
 
-      console.log("Searching customers with filters:", options);
-      return { results: [], total: 0 };
+      if (options.minRating != null) {
+        list = list.filter((c) => c.averageRating >= options.minRating!);
+      }
+      if (options.maxRating != null) {
+        list = list.filter((c) => c.averageRating <= options.maxRating!);
+      }
+      if (options.riskLevel) {
+        list = list.filter((c) => c.riskLevel === options.riskLevel);
+      }
+      if (options.minReviews != null) {
+        list = list.filter((c) => c.reviewCount >= options.minReviews!);
+      }
+      if (options.state && options.state.trim().length === 2) {
+        const st = options.state.trim().toUpperCase();
+        list = list.filter((c) => (c.state ?? "").toUpperCase() === st);
+      }
+
+      const limit = options.limit ?? 20;
+      const offset = options.offset ?? 0;
+      const total = list.length;
+      const results = list.slice(offset, offset + limit);
+      return { results, total };
     } catch (error) {
       console.error("Failed to search customers:", error);
       return { results: [], total: 0 };

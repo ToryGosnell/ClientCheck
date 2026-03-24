@@ -117,7 +117,7 @@ export default function HomeScreen() {
         }
       }
 
-      const finalUrl = apiUrl(`/api/customers?search=${encodeURIComponent(debouncedLanding)}`);
+      const finalUrl = apiUrl(`/customers?search=${encodeURIComponent(debouncedLanding)}`);
       console.log("SEARCH URL", finalUrl);
       try {
         // Public search: omit credentials avoids cross-site cookie / credentialed-CORS edge cases (localhost → Railway).
