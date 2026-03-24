@@ -127,6 +127,13 @@
       "when": 1773370000000,
       "tag": "0019_legal_acceptance",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1773371000000,
+      "tag": "0020_customers_normalization_columns",
+      "breakpoints": true
     }
   ]
 }
