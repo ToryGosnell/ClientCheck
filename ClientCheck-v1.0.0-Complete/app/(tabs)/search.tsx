@@ -182,7 +182,18 @@ export default function SearchScreen() {
     retry: false,
   });
 
-  const useRestFallback = searchEnabled && (!algoliaConfigured || algoliaQuery.isError);
+  const algoliaHitCount = algoliaQuery.data?.length ?? 0;
+  /** Use Algolia rows only when it actually returned hits; empty Algolia success must fall through to REST (live DB). */
+  const useAlgoliaResults =
+    algoliaConfigured &&
+    algoliaQuery.isSuccess &&
+    !algoliaQuery.isError &&
+    algoliaHitCount > 0;
+  const useRestFallback =
+    searchEnabled &&
+    (!algoliaConfigured ||
+      algoliaQuery.isError ||
+      (algoliaQuery.isSuccess && !algoliaQuery.isError && algoliaHitCount === 0));
 
   const {
     data: restSearchResults,
@@ -208,12 +219,19 @@ export default function SearchScreen() {
         throw new Error(data?.error ?? `Search failed (${res.status})`);
       }
       let rows = Array.isArray(data.results) ? (data.results as Customer[]) : [];
+      console.log("[customer-search] REST parsed response", {
+        httpStatus: res.status,
+        resultsArrayLength: rows.length,
+        keys: rows[0] != null ? Object.keys(rows[0] as object).slice(0, 12) : [],
+      });
       const st = selectedState.trim();
       if (st.length === 2) {
         const upper = st.toUpperCase();
         rows = rows.filter((c) => String(c.state ?? "").toUpperCase() === upper);
       }
-      return rows.slice(0, MAX_RESULTS);
+      const sliced = rows.slice(0, MAX_RESULTS);
+      console.log("[customer-search] REST rows after state filter + cap", { count: sliced.length });
+      return sliced;
     },
     enabled: searchEnabled && useRestFallback,
     placeholderData: keepPreviousData,
@@ -222,7 +240,7 @@ export default function SearchScreen() {
   });
 
   const displayResults = useMemo(() => {
-    if (searchEnabled && algoliaConfigured && algoliaQuery.isSuccess && !algoliaQuery.isError) {
+    if (searchEnabled && useAlgoliaResults) {
       return algoliaQuery.data ?? [];
     }
     if (searchEnabled && useRestFallback) {
@@ -231,9 +249,7 @@ export default function SearchScreen() {
     return [];
   }, [
     searchEnabled,
-    algoliaConfigured,
-    algoliaQuery.isSuccess,
-    algoliaQuery.isError,
+    useAlgoliaResults,
     algoliaQuery.data,
     useRestFallback,
     restSearchResults,
@@ -251,16 +267,14 @@ export default function SearchScreen() {
   const resolvedSearchSource = useMemo((): "algolia" | "rest_api" | null => {
     if (!searchEnabled || isSearchLoading) return null;
     if (isSearchError) return null;
-    if (algoliaConfigured && algoliaQuery.isSuccess && !algoliaQuery.isError) return "algolia";
+    if (useAlgoliaResults) return "algolia";
     if (useRestFallback && !restIsError) return "rest_api";
     return null;
   }, [
     searchEnabled,
     isSearchLoading,
     isSearchError,
-    algoliaConfigured,
-    algoliaQuery.isSuccess,
-    algoliaQuery.isError,
+    useAlgoliaResults,
     useRestFallback,
     restIsError,
   ]);
@@ -279,6 +293,13 @@ export default function SearchScreen() {
   const hasQuery = debouncedQuery.length >= MIN_CHARS;
   const rawResultsCount = displayResults.length;
   const displayResultsCount = displayResults.length;
+  useEffect(() => {
+    if (!hasQuery) return;
+    console.log("[customer-search] rendered results count", {
+      count: displayResults.length,
+      source: resolvedSearchSource,
+    });
+  }, [hasQuery, displayResults.length, resolvedSearchSource]);
   const flatListShouldRender = hasQuery && displayResultsCount > 0;
   const showResults = hasQuery && displayResults.length > 0;
   const showNoResults = hasQuery && !isSearchLoading && !isSearchError && displayResults.length === 0;

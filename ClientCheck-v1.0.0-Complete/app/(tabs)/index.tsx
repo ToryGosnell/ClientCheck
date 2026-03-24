@@ -107,10 +107,14 @@ export default function HomeScreen() {
             hitsPerPage: 15,
           });
           if (ac.signal.aborted) return;
-          setHomeSearchResults(rows as unknown as Record<string, unknown>[]);
-          setHomeSearchError(null);
-          setHomeSearchLoading(false);
-          return;
+          if (rows.length > 0) {
+            console.log("[customer-search] home Algolia hits", { count: rows.length });
+            setHomeSearchResults(rows as unknown as Record<string, unknown>[]);
+            setHomeSearchError(null);
+            setHomeSearchLoading(false);
+            return;
+          }
+          // Algolia OK but empty index — use live REST results
         } catch {
           if (ac.signal.aborted) return;
           // fall through to REST fallback
@@ -146,7 +150,12 @@ export default function HomeScreen() {
           return;
         }
         const list = Array.isArray(data.results) ? data.results : [];
+        console.log("[customer-search] home REST parsed response", {
+          httpStatus: res.status,
+          resultsCount: list.length,
+        });
         setHomeSearchResults(list as Record<string, unknown>[]);
+        console.log("[customer-search] home rendered autocomplete rows", { count: list.length });
       } catch (e: unknown) {
         if (ac.signal.aborted) return;
         const err = e as { name?: string; message?: string };
