@@ -2,7 +2,7 @@
  * Inserts search-test customers (unique 555 phones).
  * Adapts to actual `customers` columns (SHOW COLUMNS) so older DBs without normalized* still work.
  *
- * Usage: npm run db:seed:search
+ * Usage: npm run db:seed:search  (set DATABASE_URL — e.g. Railway: `railway run npm run db:seed:search`)
  */
 import "dotenv/config";
 import mysql, { type Connection, type RowDataPacket } from "mysql2/promise";
@@ -31,6 +31,46 @@ type SeedRow = {
 };
 
 const ROWS: SeedRow[] = [
+  // Matches legacy home preview cards (Karen M. / Robert D. / Sarah T.) — searchable via GET /api/customers?search=...
+  {
+    firstName: "Karen",
+    lastName: "M.",
+    phone: "+1-602-555-0191",
+    email: "karen.m.preview@clientcheck.local",
+    address: "100 Preview Ln",
+    city: "Phoenix",
+    state: "AZ",
+    zip: "85001",
+    reviewCount: 4,
+    overallRating: "1.80",
+    riskLevel: "high",
+  },
+  {
+    firstName: "Robert",
+    lastName: "D.",
+    phone: "+1-480-555-0192",
+    email: "robert.d.preview@clientcheck.local",
+    address: "200 Preview Rd",
+    city: "Mesa",
+    state: "AZ",
+    zip: "85201",
+    reviewCount: 5,
+    overallRating: "2.10",
+    riskLevel: "high",
+  },
+  {
+    firstName: "Sarah",
+    lastName: "T.",
+    phone: "+1-480-555-0193",
+    email: "sarah.t.preview@clientcheck.local",
+    address: "300 Preview Ave",
+    city: "Chandler",
+    state: "AZ",
+    zip: "85224",
+    reviewCount: 12,
+    overallRating: "4.90",
+    riskLevel: "low",
+  },
   { firstName: "Karen", lastName: "Mitchell", phone: "+1-602-555-0101", email: "karen.mitchell@example.com", address: "1423 Elm St", city: "Phoenix", state: "AZ", zip: "85001", reviewCount: 4, overallRating: "3.20", riskLevel: "medium" },
   { firstName: "Karen", lastName: "Martinez", phone: "+1-520-555-0102", email: "karen.martinez@example.com", address: "88 Cactus Ln", city: "Tucson", state: "AZ", zip: "85701", reviewCount: 2, overallRating: "4.10", riskLevel: "low" },
   { firstName: "Karen", lastName: "MacDonald", phone: "+1-303-555-0103", email: "karen.macdonald@example.com", address: "2100 Mountain View Dr", city: "Denver", state: "CO", zip: "80202", reviewCount: 1, overallRating: "4.50", riskLevel: "low" },
