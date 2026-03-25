@@ -83,6 +83,30 @@ describe("/api/oauth/start", () => {
     }
   });
 
+  it("returns structured JSON when the upstream authorize step fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    authorizeRedirectMock.mockRejectedValue(new Error("upstream authorize failed"));
+    const server = await startOAuthTestServer({
+      OAUTH_SERVER_URL: "https://oauth.example.com",
+      EXPO_PUBLIC_OAUTH_SERVER_URL: "",
+    });
+
+    try {
+      const response = await fetch(
+        `${server.baseUrl}/api/oauth/start?appId=test-app&redirect_uri=${encodeURIComponent("https://clientcheck-production.up.railway.app/api/oauth/callback")}&state=test-state&type=signIn`,
+      );
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({
+        error: "OAuth authorize failed",
+        message: "upstream authorize failed",
+      });
+      expect(consoleError).toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
+  });
+
   it("returns JSON with a safe message when OAUTH_SERVER_URL is missing", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const server = await startOAuthTestServer({

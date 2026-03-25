@@ -2,50 +2,64 @@ import {
   boolean,
   decimal,
   int,
+  index,
   mysqlEnum,
   mysqlTable,
   text,
   timestamp,
+  uniqueIndex,
   varchar,
 } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
  */
-export const users = mysqlTable("users", {
-  id: int("id").autoincrement().primaryKey(),
-  openId: varchar("openId", { length: 64 }).notNull().unique(),
-  name: text("name"),
-  email: varchar("email", { length: 320 }),
-  loginMethod: varchar("loginMethod", { length: 64 }),
-  role: mysqlEnum("role", ["user", "admin", "contractor", "customer"]).default("user").notNull(),
-  /** Set when the user closes their account (soft delete). Row is retained for FK integrity. */
-  deletedAt: timestamp("deletedAt"),
-  accountStatus: mysqlEnum("accountStatus", ["active", "deleted", "suspended"])
-    .default("active")
-    .notNull(),
-  termsAcceptedAt: timestamp("termsAcceptedAt"),
-  privacyAcceptedAt: timestamp("privacyAcceptedAt"),
-  legalAcceptanceVersion: varchar("legalAcceptanceVersion", { length: 32 }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
-  /** Customer identity verification completed (Stripe Checkout, metadata.type=identity_verification). */
-  isVerified: boolean("isVerified").default(false).notNull(),
-  /** When verification completed; MySQL DATETIME / nullable. */
-  verifiedAt: timestamp("verifiedAt"),
-  /** Set once: numeric app user id of the contractor who shared a customer profile link this user followed (growth / referrals). */
-  referredByUserId: int("referredByUserId"),
-  /** Contractors who used this user's /invite link (signup attributed). */
-  referralCount: int("referralCount").default(0).notNull(),
-  /** Subset of referralCount that completed contractor verification. */
-  verifiedReferralCount: int("verifiedReferralCount").default(0).notNull(),
-  freeMonthsEarned: int("freeMonthsEarned").default(0).notNull(),
-  /** Stacked referral reward extension end (subscription access). */
-  subscriptionExtendedUntil: timestamp("subscriptionExtendedUntil"),
-  /** True until the user dismisses the in-app reward celebration. */
-  referralRewardUnseen: boolean("referralRewardUnseen").default(false).notNull(),
-});
+export const users = mysqlTable(
+  "users",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    openId: varchar("openId", { length: 64 }).notNull().unique(),
+    name: text("name"),
+    email: varchar("email", { length: 320 }),
+    /** Lower-cased + trimmed email for deterministic auth lookups. */
+    emailNormalized: varchar("emailNormalized", { length: 320 }),
+    /** Scrypt hash for first-party password auth. */
+    passwordHash: varchar("passwordHash", { length: 255 }),
+    loginMethod: varchar("loginMethod", { length: 64 }),
+    role: mysqlEnum("role", ["user", "admin", "contractor", "customer"]).default("user").notNull(),
+    /** Set when the user closes their account (soft delete). Row is retained for FK integrity. */
+    deletedAt: timestamp("deletedAt"),
+    accountStatus: mysqlEnum("accountStatus", ["active", "deleted", "suspended"])
+      .default("active")
+      .notNull(),
+    termsAcceptedAt: timestamp("termsAcceptedAt"),
+    privacyAcceptedAt: timestamp("privacyAcceptedAt"),
+    legalAcceptanceVersion: varchar("legalAcceptanceVersion", { length: 32 }),
+    /** First-party email verification completion timestamp. */
+    emailVerifiedAt: timestamp("emailVerifiedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
+    /** Customer identity verification completed (Stripe Checkout, metadata.type=identity_verification). */
+    isVerified: boolean("isVerified").default(false).notNull(),
+    /** When verification completed; MySQL DATETIME / nullable. */
+    verifiedAt: timestamp("verifiedAt"),
+    /** Set once: numeric app user id of the contractor who shared a customer profile link this user followed (growth / referrals). */
+    referredByUserId: int("referredByUserId"),
+    /** Contractors who used this user's /invite link (signup attributed). */
+    referralCount: int("referralCount").default(0).notNull(),
+    /** Subset of referralCount that completed contractor verification. */
+    verifiedReferralCount: int("verifiedReferralCount").default(0).notNull(),
+    freeMonthsEarned: int("freeMonthsEarned").default(0).notNull(),
+    /** Stacked referral reward extension end (subscription access). */
+    subscriptionExtendedUntil: timestamp("subscriptionExtendedUntil"),
+    /** True until the user dismisses the in-app reward celebration. */
+    referralRewardUnseen: boolean("referralRewardUnseen").default(false).notNull(),
+  },
+  (table) => ({
+    emailNormalizedUnique: uniqueIndex("users_email_normalized_unique").on(table.emailNormalized),
+  }),
+);
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
@@ -1046,6 +1060,48 @@ export const emailVerificationTokens = mysqlTable("email_verification_tokens", {
 });
 export type EmailVerificationToken = typeof emailVerificationTokens.$inferSelect;
 export type InsertEmailVerificationToken = typeof emailVerificationTokens.$inferInsert;
+
+/** First-party opaque auth sessions (token hash only; raw token never stored). */
+export const sessions = mysqlTable(
+  "sessions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("userId").notNull(),
+    tokenHash: varchar("tokenHash", { length: 255 }).notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    revokedAt: timestamp("revokedAt"),
+    lastSeenAt: timestamp("lastSeenAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    ipAddress: varchar("ipAddress", { length: 64 }),
+    userAgent: varchar("userAgent", { length: 255 }),
+  },
+  (table) => ({
+    tokenHashUnique: uniqueIndex("sessions_token_hash_unique").on(table.tokenHash),
+    userIdIdx: index("sessions_user_id_idx").on(table.userId),
+    expiresAtIdx: index("sessions_expires_at_idx").on(table.expiresAt),
+  }),
+);
+export type Session = typeof sessions.$inferSelect;
+export type InsertSession = typeof sessions.$inferInsert;
+
+/** One-time password reset tokens (hashed + expiring). */
+export const passwordResetTokens = mysqlTable(
+  "password_reset_tokens",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    userId: int("userId").notNull(),
+    tokenHash: varchar("tokenHash", { length: 255 }).notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    usedAt: timestamp("usedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    tokenHashUnique: uniqueIndex("password_reset_tokens_token_hash_unique").on(table.tokenHash),
+    userIdIdx: index("password_reset_tokens_user_id_idx").on(table.userId),
+  }),
+);
+export type PasswordResetToken = typeof passwordResetTokens.$inferSelect;
+export type InsertPasswordResetToken = typeof passwordResetTokens.$inferInsert;
 
 export const auditLogs = mysqlTable("audit_logs", {
   id: int("id").autoincrement().primaryKey(),

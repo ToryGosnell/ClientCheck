@@ -66,6 +66,12 @@ class OAuthService {
     redirectUri: string;
     state: string;
   }): Promise<string> {
+    console.log("[OAuth] authorize appId =", input.appId);
+    console.log("[OAuth] authorize redirectUri =", input.redirectUri);
+    console.log("[OAuth] authorize state =", input.state);
+    console.log("[OAuth] authorize has OAUTH_SERVER_URL =", Boolean(ENV.oAuthServerUrl));
+    console.log("[OAuth] authorize endpoint =", `${ENV.oAuthServerUrl}${AUTHORIZE_PATH}`);
+
     const payload: AuthorizeRequest = {
       redirectUri: input.redirectUri,
       projectId: input.appId,
@@ -79,6 +85,7 @@ class OAuthService {
       throw new Error("OAuth authorize response did not include redirectUrl");
     }
 
+    console.log("[OAuth] authorize redirectUrl =", data.redirectUrl);
     return data.redirectUrl;
   }
 

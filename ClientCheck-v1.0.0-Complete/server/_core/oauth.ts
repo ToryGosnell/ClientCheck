@@ -169,11 +169,20 @@ export function registerOAuthRoutes(app: Express) {
         console.log("[OAuth] account_type passthrough =", accountType);
       }
 
-      const redirectTarget = await sdk.getAuthorizationRedirectUrl({
-        appId,
-        redirectUri,
-        state,
-      });
+      let redirectTarget: string;
+      try {
+        redirectTarget = await sdk.getAuthorizationRedirectUrl({
+          appId,
+          redirectUri,
+          state,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        console.error("[OAuth] Authorize failed:", message);
+        console.error(error instanceof Error ? error.stack : error);
+        res.status(500).json({ error: "OAuth authorize failed", message });
+        return;
+      }
 
       console.log("[OAuth] final redirect target =", redirectTarget);
       res.redirect(302, redirectTarget);

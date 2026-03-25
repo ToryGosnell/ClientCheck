@@ -3,6 +3,7 @@ import express from "express";
 import * as Sentry from "@sentry/node";
 import { nodeProfilingIntegration } from "@sentry/profiling-node";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
+import { registerFirstPartyAuthRoutes } from "./auth";
 import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
@@ -73,6 +74,9 @@ async function startServer() {
       next();
     });
 
+    // First-party auth routes are registered first during migration so /api/auth/*
+    // resolves to DB-backed auth while Manus OAuth routes remain available.
+    registerFirstPartyAuthRoutes(app);
     registerOAuthRoutes(app);
 
     // Stripe webhooks: MUST use raw body only — never attach express.json() (or any JSON body parser)

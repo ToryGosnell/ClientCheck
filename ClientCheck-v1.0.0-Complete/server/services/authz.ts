@@ -23,8 +23,8 @@ export interface AuthenticatedRequest extends Request {
  */
 export async function attachSessionAuth(req: AuthenticatedRequest, _res: Response, next: NextFunction) {
   try {
-    const { sdk } = await import("../_core/sdk");
-    const user = await sdk.authenticateRequest(req);
+    const { authenticateRequest } = await import("../_core/auth");
+    const user = await authenticateRequest(req);
     if (user) {
       req.auth = {
         ...(req.auth || {}),
