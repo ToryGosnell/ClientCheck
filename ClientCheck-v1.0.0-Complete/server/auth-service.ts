@@ -158,11 +158,20 @@ export async function loginFirstPartyUser(
   if (!db) throw new Error("Database not available");
   const emailNormalized = normalizeEmail(input.email);
   const user = await getUserByEmailNormalized(emailNormalized);
+  console.log("[Auth Login] user lookup", {
+    emailNormalized,
+    foundByEmailNormalized: Boolean(user),
+    hasPasswordHash: Boolean(user?.passwordHash),
+  });
   if (!user || !user.passwordHash) {
     throw new Error("Invalid credentials");
   }
 
   const validPassword = await verifyPassword(input.password, user.passwordHash);
+  console.log("[Auth Login] password verification", {
+    emailNormalized,
+    passwordComparisonPassed: validPassword,
+  });
   if (!validPassword) {
     throw new Error("Invalid credentials");
   }

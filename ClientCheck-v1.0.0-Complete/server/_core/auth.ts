@@ -169,6 +169,10 @@ export function registerFirstPartyAuthRoutes(app: Express): void {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Login failed";
+      console.warn("[Auth] /api/auth/login failed", {
+        message,
+        bodyKeys: getBodyKeys(req),
+      });
       return res.status(401).json({ error: message });
     }
   });
