@@ -88,11 +88,6 @@ async function startServer() {
       next();
     });
 
-    // First-party auth routes are registered first during migration so /api/auth/*
-    // resolves to DB-backed auth while Manus OAuth routes remain available.
-    registerFirstPartyAuthRoutes(app);
-    registerOAuthRoutes(app);
-
     // Stripe webhooks: MUST use raw body only — never attach express.json() (or any JSON body parser)
     // to these paths; signature verification requires the exact bytes Stripe sent.
     // Registered strictly BEFORE app.use(express.json()) below.
@@ -105,6 +100,11 @@ async function startServer() {
 
     app.use(express.json({ limit: "50mb" }));
     app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+    // First-party auth routes require parsed JSON bodies.
+    // Keep them before legacy OAuth route registration for /api/auth/* precedence.
+    registerFirstPartyAuthRoutes(app);
+    registerOAuthRoutes(app);
 
     // Global rate limiting — protects all routes from abuse
     app.use((req, res, next) => {

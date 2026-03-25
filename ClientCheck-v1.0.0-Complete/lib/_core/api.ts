@@ -3,11 +3,6 @@ import { getApiBaseUrl } from "@/constants/oauth";
 import { ensureApiPrefix } from "@/lib/api";
 import * as Auth from "./auth";
 
-type ApiResponse<T> = {
-  data?: T;
-  error?: string;
-};
-
 export async function apiCall<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -53,22 +48,6 @@ export async function apiCall<T>(endpoint: string, options: RequestInit = {}): P
   return (text ? JSON.parse(text) : {}) as T;
 }
 
-// OAuth callback handler - exchange code for session token
-// Calls /api/oauth/mobile endpoint which returns JSON with app_session_id and user
-export async function exchangeOAuthCode(
-  code: string,
-  state: string,
-): Promise<{ sessionToken: string; user: any }> {
-  const params = new URLSearchParams({ code, state });
-  const endpoint = `/api/oauth/mobile?${params.toString()}`;
-  const result = await apiCall<{ app_session_id: string; user: any }>(endpoint);
-
-  return {
-    sessionToken: result.app_session_id,
-    user: result.user,
-  };
-}
-
 // Logout
 export async function logout(): Promise<void> {
   await apiCall<void>("/api/auth/logout", {
@@ -79,20 +58,32 @@ export async function logout(): Promise<void> {
 /** JSON shape for GET /api/auth/me → `{ user }` (datetimes as ISO 8601 strings). */
 export type MeUserJson = {
   id: number | null;
-  openId: string | null;
+  openId?: string | null;
   name: string | null;
   email: string | null;
   loginMethod: string | null;
   role: string | null;
   isVerified: boolean;
   verifiedAt: string | null;
+  emailVerifiedAt?: string | null;
   lastSignedIn: string;
-  /** Set once after first OAuth sync; cleared after first GET /api/auth/me on web. */
-  isNewUser?: boolean;
 };
 
-// Get current authenticated user (web uses cookie-based auth)
-export async function getMe(): Promise<MeUserJson | null> {
+export type AuthResponse = {
+  user: MeUserJson;
+  sessionToken?: string;
+  app_session_id?: string;
+};
+
+async function persistNativeSessionToken(result: AuthResponse): Promise<void> {
+  if (Platform.OS === "web") return;
+  const token = result.sessionToken ?? result.app_session_id ?? null;
+  if (token) {
+    await Auth.setSessionToken(token);
+  }
+}
+
+export async function me(): Promise<MeUserJson | null> {
   try {
     const result = await apiCall<{ user: MeUserJson | null }>("/api/auth/me");
     return result.user ?? null;
@@ -107,24 +98,60 @@ export async function getMe(): Promise<MeUserJson | null> {
   }
 }
 
-// Establish session cookie on the backend (3000-xxx domain)
-// Called after receiving token via postMessage to get a proper Set-Cookie from the backend
-export async function establishSession(token: string): Promise<boolean> {
-  try {
-    const baseUrl = getApiBaseUrl();
-    const url = `${baseUrl}/api/auth/session`;
+// Backward-compatible alias used by existing code.
+export const getMe = me;
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      credentials: "include",
-    });
+export async function signup(input: {
+  email: string;
+  password: string;
+  name?: string;
+  accountType?: "contractor" | "customer";
+  legalAcceptanceVersion?: string;
+}): Promise<AuthResponse> {
+  const result = await apiCall<AuthResponse>("/api/auth/signup", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  await persistNativeSessionToken(result);
+  return result;
+}
 
-    return response.ok;
-  } catch {
-    return false;
-  }
+export async function login(input: { email: string; password: string }): Promise<AuthResponse> {
+  const result = await apiCall<AuthResponse>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  await persistNativeSessionToken(result);
+  return result;
+}
+
+export async function forgotPassword(email: string): Promise<{ success: boolean }> {
+  return apiCall<{ success: boolean }>("/api/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function resetPassword(input: {
+  token: string;
+  password: string;
+}): Promise<{ success: boolean }> {
+  return apiCall<{ success: boolean }>("/api/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function verifyEmail(token: string): Promise<{ success: boolean; error?: string }> {
+  return apiCall<{ success: boolean; error?: string }>("/api/auth/verify-email", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+}
+
+export async function resendVerification(email?: string): Promise<{ success: boolean }> {
+  return apiCall<{ success: boolean }>("/api/auth/resend-verification", {
+    method: "POST",
+    body: JSON.stringify(email ? { email } : {}),
+  });
 }

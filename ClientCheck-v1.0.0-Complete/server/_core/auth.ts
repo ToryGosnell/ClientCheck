@@ -69,8 +69,29 @@ function setSessionCookie(req: Request, res: Response, token: string): void {
   });
 }
 
+function getBodyKeys(req: Request): string[] {
+  const body = req.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return [];
+  return Object.keys(body as Record<string, unknown>);
+}
+
+function logAuthRouteHit(route: string, req: Request): void {
+  console.log(`[Auth] ${route} hit`, {
+    method: req.method,
+    bodyKeys: getBodyKeys(req),
+  });
+}
+
+function validationFailed(res: Response, message: string): Response {
+  return res.status(400).json({
+    error: "Validation failed",
+    message,
+  });
+}
+
 export function registerFirstPartyAuthRoutes(app: Express): void {
   app.post("/api/auth/signup", async (req: Request, res: Response) => {
+    logAuthRouteHit("/api/auth/signup", req);
     try {
       const { email, password, name, accountType, termsAcceptedAt, privacyAcceptedAt, legalAcceptanceVersion } =
         (req.body as {
@@ -84,7 +105,10 @@ export function registerFirstPartyAuthRoutes(app: Express): void {
         }) ?? {};
 
       if (!email || !password) {
-        return res.status(400).json({ error: "email and password are required" });
+        console.warn("[Auth] /api/auth/signup validation failed: missing email or password", {
+          bodyKeys: getBodyKeys(req),
+        });
+        return validationFailed(res, "email and password are required");
       }
       const normalizedAccountType: "contractor" | "customer" =
         accountType === "customer" ? "customer" : "contractor";
@@ -113,15 +137,23 @@ export function registerFirstPartyAuthRoutes(app: Express): void {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Signup failed";
-      return res.status(400).json({ error: message });
+      console.warn("[Auth] /api/auth/signup failed", {
+        message,
+        bodyKeys: getBodyKeys(req),
+      });
+      return validationFailed(res, message);
     }
   });
 
   app.post("/api/auth/login", async (req: Request, res: Response) => {
+    logAuthRouteHit("/api/auth/login", req);
     try {
       const { email, password } = (req.body as { email?: string; password?: string }) ?? {};
       if (!email || !password) {
-        return res.status(400).json({ error: "email and password are required" });
+        console.warn("[Auth] /api/auth/login validation failed: missing email or password", {
+          bodyKeys: getBodyKeys(req),
+        });
+        return validationFailed(res, "email and password are required");
       }
 
       const { user, sessionToken } = await loginFirstPartyUser(
@@ -166,8 +198,14 @@ export function registerFirstPartyAuthRoutes(app: Express): void {
   });
 
   app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {
+    logAuthRouteHit("/api/auth/forgot-password", req);
     const { email } = (req.body as { email?: string }) ?? {};
-    if (!email) return res.status(400).json({ error: "email is required" });
+    if (!email) {
+      console.warn("[Auth] /api/auth/forgot-password validation failed: missing email", {
+        bodyKeys: getBodyKeys(req),
+      });
+      return validationFailed(res, "email is required");
+    }
     try {
       await requestPasswordReset(email, getBaseUrl(req));
       return res.status(200).json({ success: true });

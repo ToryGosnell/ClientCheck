@@ -1,89 +1,84 @@
-import React, { useState } from "react";
-import { ScrollView, View, Text, Pressable, TextInput, Alert } from "react-native";
+import { useState } from "react";
+import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { ScreenContainer } from "@/components/screen-container";
-import { useRouter } from "expo-router";
-import * as Haptics from "expo-haptics";
 import * as Api from "@/lib/_core/api";
 import * as Auth from "@/lib/_core/auth";
 import { setSelectedAccountType } from "@/lib/account-type";
-import { consumePostLoginRedirect } from "@/lib/post-login-redirect";
+import { setPostLoginRedirect, consumePostLoginRedirect } from "@/lib/post-login-redirect";
 import { resolvePostLoginDestination } from "@/lib/resolve-post-login-destination";
 import { tryApplyPendingContractorInviteReferral } from "@/lib/contractor-invite-after-login";
 import { tryApplyPendingShareReferral } from "@/lib/share-referral-after-login";
 
 const LEGAL_ACCEPTANCE_VERSION = "2026-03-24";
 
-export default function CustomerSignupScreen() {
+export default function SignupScreen() {
   const router = useRouter();
-  const [email, setEmail] = useState("");
+  const params = useLocalSearchParams<{ accountType?: string; redirect?: string }>();
+  const accountType = params.accountType === "customer" ? "customer" : "contractor";
+
   const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [loading, setLoading] = useState(false);
   const [agreeToTerms, setAgreeToTerms] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handlePress = async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  const navigateAfterSignup = async () => {
+    await tryApplyPendingContractorInviteReferral();
+    await tryApplyPendingShareReferral();
+    const consumed = await consumePostLoginRedirect();
+    const destination = await resolvePostLoginDestination(consumed);
+    router.replace(destination as never);
   };
 
-  const validateForm = (): boolean => {
+  const validate = (): boolean => {
     if (!name.trim()) {
-      Alert.alert("Error", "Please enter your name");
+      Alert.alert("Sign up failed", "Name is required.");
       return false;
     }
-
     if (!email.includes("@")) {
-      Alert.alert("Error", "Please enter a valid email");
+      Alert.alert("Sign up failed", "Enter a valid email.");
       return false;
     }
-
     if (password.length < 8) {
-      Alert.alert("Error", "Password must be at least 8 characters");
+      Alert.alert("Sign up failed", "Password must be at least 8 characters.");
       return false;
     }
-
     if (password !== confirmPassword) {
-      Alert.alert("Error", "Passwords do not match");
+      Alert.alert("Sign up failed", "Passwords do not match.");
       return false;
     }
-
     if (!agreeToTerms) {
-      Alert.alert("Error", "Please agree to the terms and conditions");
+      Alert.alert("Sign up failed", "You must accept Terms and Privacy.");
       return false;
     }
-
     return true;
   };
 
   const handleSignup = async () => {
-    if (!validateForm()) return;
-
+    if (loading) return;
+    if (!validate()) return;
     setLoading(true);
-    handlePress();
-
     try {
-      await setSelectedAccountType("customer");
+      if (params.redirect?.trim()) {
+        await setPostLoginRedirect(params.redirect.trim());
+      }
+      await setSelectedAccountType(accountType);
       const result = await Api.signup({
         email: email.trim(),
         password,
         name: name.trim(),
-        accountType: "customer",
+        accountType,
         legalAcceptanceVersion: LEGAL_ACCEPTANCE_VERSION,
       });
+
       const userInfo = Auth.userFromApiJson(result.user as unknown as Record<string, unknown>);
       await Auth.setUserInfo(userInfo);
-      await tryApplyPendingContractorInviteReferral();
-      await tryApplyPendingShareReferral();
-
-      const consumed = await consumePostLoginRedirect();
-      if (consumed?.trim()) {
-        const destination = await resolvePostLoginDestination(consumed);
-        router.replace(destination as never);
-        return;
-      }
-      router.replace("/customer-onboarding-1" as never);
+      await navigateAfterSignup();
     } catch (error) {
-      Alert.alert("Signup Failed", String(error));
+      const message = error instanceof Error ? error.message : "Unable to create account";
+      Alert.alert("Sign up failed", message);
     } finally {
       setLoading(false);
     }
@@ -93,17 +88,14 @@ export default function CustomerSignupScreen() {
     <ScreenContainer>
       <ScrollView contentContainerStyle={{ flexGrow: 1 }} className="flex-1">
         <View className="flex-1 gap-6 px-6 py-8">
-          {/* Header */}
           <View className="gap-2">
-            <Text className="text-4xl font-bold text-foreground">Join ClientCheck</Text>
+            <Text className="text-4xl font-bold text-foreground">Create Account</Text>
             <Text className="text-base text-muted">
-              Participate in fair, verified reviews of contractors
+              {accountType === "customer" ? "Customer account setup." : "Contractor account setup."}
             </Text>
           </View>
 
-          {/* Form */}
           <View className="gap-4">
-            {/* Name Input */}
             <View className="gap-2">
               <Text className="text-sm font-semibold text-foreground">Full Name</Text>
               <TextInput
@@ -114,8 +106,6 @@ export default function CustomerSignupScreen() {
                 className="bg-surface border border-border rounded-lg px-4 py-3 text-foreground"
               />
             </View>
-
-            {/* Email Input */}
             <View className="gap-2">
               <Text className="text-sm font-semibold text-foreground">Email</Text>
               <TextInput
@@ -128,8 +118,6 @@ export default function CustomerSignupScreen() {
                 className="bg-surface border border-border rounded-lg px-4 py-3 text-foreground"
               />
             </View>
-
-            {/* Password Input */}
             <View className="gap-2">
               <Text className="text-sm font-semibold text-foreground">Password</Text>
               <TextInput
@@ -140,10 +128,7 @@ export default function CustomerSignupScreen() {
                 secureTextEntry
                 className="bg-surface border border-border rounded-lg px-4 py-3 text-foreground"
               />
-              <Text className="text-xs text-muted">At least 8 characters</Text>
             </View>
-
-            {/* Confirm Password Input */}
             <View className="gap-2">
               <Text className="text-sm font-semibold text-foreground">Confirm Password</Text>
               <TextInput
@@ -156,72 +141,35 @@ export default function CustomerSignupScreen() {
               />
             </View>
 
-            {/* Terms Checkbox */}
-            <Pressable
-              onPress={() => {
-                handlePress();
-                setAgreeToTerms(!agreeToTerms);
-              }}
-              className="flex-row gap-3 items-center py-2"
-            >
+            <Pressable onPress={() => setAgreeToTerms((v) => !v)} className="flex-row gap-3 items-center py-2">
               <View
                 className={`w-6 h-6 rounded border-2 items-center justify-center ${
                   agreeToTerms ? "bg-primary border-primary" : "border-border"
                 }`}
               >
-                {agreeToTerms && <Text className="text-white font-bold">✓</Text>}
+                {agreeToTerms ? <Text className="text-white font-bold">✓</Text> : null}
               </View>
               <Text className="flex-1 text-sm text-muted">
-                I agree to the{" "}
-                <Text className="text-primary font-semibold" onPress={() => router.push("/terms" as never)}>Terms & Conditions</Text> and{" "}
-                <Text className="text-primary font-semibold" onPress={() => router.push("/privacy" as never)}>Privacy Policy</Text>
+                I agree to the Terms & Conditions and Privacy Policy.
               </Text>
             </Pressable>
           </View>
 
-          {/* Info Box */}
-          <View className="bg-blue-900/20 border border-blue-600/30 rounded-lg p-4 gap-2">
-            <Text className="text-sm font-semibold text-foreground">What Happens Next</Text>
-            <Text className="text-xs text-muted leading-relaxed">
-              After you sign up, we'll show you a quick introduction to our fair review system.
-              You'll learn why both contractors and customers pay equally, and how that ensures
-              honest, trustworthy feedback.
-            </Text>
-          </View>
-
-          {/* Signup Button */}
           <Pressable
             onPress={handleSignup}
             disabled={loading}
-            style={({ pressed }) => [
-              {
-                opacity: pressed ? 0.8 : 1,
-                transform: [{ scale: pressed ? 0.97 : 1 }],
-              },
-            ]}
-            className={`py-4 px-6 rounded-lg items-center ${
-              loading ? "bg-primary/50" : "bg-primary"
-            }`}
+            className={`py-4 px-6 rounded-lg items-center ${loading ? "bg-primary/50" : "bg-primary"}`}
           >
             <Text className="text-white font-bold text-lg">
               {loading ? "Creating Account..." : "Create Account"}
             </Text>
           </Pressable>
 
-          {/* Login Link */}
           <View className="flex-row items-center justify-center gap-2">
             <Text className="text-sm text-muted">Already have an account?</Text>
-            <Pressable onPress={() => router.push("/login?accountType=customer" as never)}>
+            <Pressable onPress={() => router.push(`/login?accountType=${accountType}` as never)}>
               <Text className="text-sm text-primary font-semibold">Sign In</Text>
             </Pressable>
-          </View>
-
-          {/* Footer */}
-          <View className="items-center gap-2 pb-4">
-            <Text className="text-xs text-muted text-center">
-              By signing up, you agree to participate in our fair, two-sided review platform where
-              both contractors and customers pay equally.
-            </Text>
           </View>
         </View>
       </ScrollView>

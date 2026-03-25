@@ -3,7 +3,7 @@
  * Introduces new users to the app and guides them to signup
  */
 
-import { ScrollView, Text, View, TouchableOpacity, Image } from "react-native";
+import { ScrollView, Text, View, TouchableOpacity } from "react-native";
 import { useRouter } from "expo-router";
 import { ScreenContainer } from "@/components/screen-container";
 import { ScreenBackground } from "@/components/screen-background";
@@ -112,7 +112,7 @@ export default function WelcomeScreen() {
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => router.push("/(tabs)")}
+              onPress={() => router.push("/login")}
               className="py-3 active:opacity-80"
             >
               <Text className="text-primary font-semibold text-center">Already have an account? Sign In</Text>

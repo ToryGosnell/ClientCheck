@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Platform } from "react-native";
 import { DEMO_MODE, DEMO_USER } from "@/lib/demo-data";
 import { identify, reset as resetAnalytics, track } from "@/lib/analytics";
-import { trackSignupCompletedIfNew } from "@/lib/signup-completed-analytics";
 import { clearPostLoginRedirect } from "@/lib/post-login-redirect";
 import { clearPendingContractorInviteReferrer } from "@/lib/contractor-invite-pending";
 import { clearPendingShareReferrer } from "@/lib/share-referral-pending";
@@ -46,74 +45,34 @@ export function useAuth(options?: UseAuthOptions) {
     setError(null);
 
     try {
-      if (Platform.OS === "web") {
-        // Web: check localStorage cache first — if user never logged in,
-        // skip the API call entirely to avoid a noisy 401.
-        const cachedUser = await Auth.getUserInfo();
-
-        if (!cachedUser) {
+      // Native requires a stored token. Web relies on cookie auth.
+      if (Platform.OS !== "web") {
+        const sessionToken = await Auth.getSessionToken();
+        if (!sessionToken) {
+          await Auth.clearUserInfo();
           setUser(null);
           setAuthState("unauthenticated");
           return;
         }
-
-        // Cached user exists → validate the session cookie is still good
-        const apiUser = await Api.getMe();
-
-        if (apiUser) {
-          if (apiUser.id == null) {
-            await Auth.clearUserInfo();
-            setUser(null);
-            setAuthState("unauthenticated");
-            return;
-          }
-          try {
-            const userInfo = Auth.userFromApiJson(apiUser as unknown as Record<string, unknown>);
-            setUser(userInfo);
-            setAuthState("authenticated");
-            await Auth.setUserInfo(userInfo);
-            void trackSignupCompletedIfNew({
-              id: apiUser.id,
-              isNewUser: apiUser.isNewUser === true,
-            });
-          } catch {
-            await Auth.clearUserInfo();
-            setUser(null);
-            setAuthState("unauthenticated");
-          }
-        } else {
-          // Session expired or cookie cleared — clean up
-          await Auth.clearUserInfo();
-          setUser(null);
-          setAuthState("unauthenticated");
-        }
-        return;
       }
 
-      // Native: token-based auth
-      const sessionToken = await Auth.getSessionToken();
-      if (!sessionToken) {
+      // `/api/auth/me` is the source of truth for both web and native.
+      const apiUser = await Api.me();
+      if (!apiUser || apiUser.id == null) {
+        await Auth.clearUserInfo();
+        if (Platform.OS !== "web") {
+          await Auth.removeSessionToken();
+        }
         setUser(null);
         setAuthState("unauthenticated");
         return;
       }
 
-      const cachedUser = await Auth.getUserInfo();
-      if (cachedUser) {
-        try {
-          const normalized = Auth.userFromApiJson(cachedUser as unknown as Record<string, unknown>);
-          setUser(normalized);
-          setAuthState("authenticated");
-          identify(String(normalized.id), { name: normalized.name, email: normalized.email });
-          track("login", { method: "session" });
-        } catch {
-          setUser(null);
-          setAuthState("unauthenticated");
-        }
-      } else {
-        setUser(null);
-        setAuthState("unauthenticated");
-      }
+      const userInfo = Auth.userFromApiJson(apiUser as unknown as Record<string, unknown>);
+      setUser(userInfo);
+      setAuthState("authenticated");
+      await Auth.setUserInfo(userInfo);
+      identify(String(userInfo.id), { name: userInfo.name, email: userInfo.email });
     } catch (err) {
       const authError = err instanceof Error ? err : new Error("Failed to fetch user");
       console.warn("[useAuth] fetchUser failed:", authError.message);
@@ -174,22 +133,7 @@ export function useAuth(options?: UseAuthOptions) {
       return;
     }
 
-    if (Platform.OS === "web") {
-      fetchUser();
-    } else {
-      Auth.getUserInfo().then((cachedUser) => {
-        if (cachedUser) {
-          try {
-            setUser(Auth.userFromApiJson(cachedUser as unknown as Record<string, unknown>));
-            setAuthState("authenticated");
-          } catch {
-            void fetchUser();
-          }
-        } else {
-          fetchUser();
-        }
-      });
-    }
+    void fetchUser();
   }, [autoFetch, fetchUser]);
 
   return {

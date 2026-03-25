@@ -1,10 +1,10 @@
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
-import { SESSION_TOKEN_KEY, USER_INFO_KEY } from "@/constants/oauth";
+import { LEGACY_USER_INFO_KEY, SESSION_TOKEN_KEY, USER_INFO_KEY } from "@/constants/oauth";
 
 export type User = {
   id: number;
-  openId: string;
+  openId?: string | null;
   name: string | null;
   email: string | null;
   loginMethod: string | null;
@@ -30,7 +30,10 @@ export function userFromApiJson(raw: Record<string, unknown>): User {
   }
   return {
     id,
-    openId: String(raw.openId ?? ""),
+    openId:
+      raw.openId == null || raw.openId === ""
+        ? null
+        : String(raw.openId),
     name: (raw.name as string | null) ?? null,
     email: (raw.email as string | null) ?? null,
     loginMethod: (raw.loginMethod as string | null) ?? null,
@@ -78,8 +81,24 @@ export async function getUserInfo(): Promise<User | null> {
     let info: string | null = null;
     if (Platform.OS === "web") {
       info = window.localStorage.getItem(USER_INFO_KEY);
+      if (!info) {
+        const legacy = window.localStorage.getItem(LEGACY_USER_INFO_KEY);
+        if (legacy) {
+          window.localStorage.setItem(USER_INFO_KEY, legacy);
+          window.localStorage.removeItem(LEGACY_USER_INFO_KEY);
+          info = legacy;
+        }
+      }
     } else {
       info = await SecureStore.getItemAsync(USER_INFO_KEY);
+      if (!info) {
+        const legacy = await SecureStore.getItemAsync(LEGACY_USER_INFO_KEY);
+        if (legacy) {
+          await SecureStore.setItemAsync(USER_INFO_KEY, legacy);
+          await SecureStore.deleteItemAsync(LEGACY_USER_INFO_KEY);
+          info = legacy;
+        }
+      }
     }
     if (!info) return null;
     return JSON.parse(info);

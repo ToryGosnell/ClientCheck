@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View, Platform, ActivityIndicator } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View, ActivityIndicator } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ScreenBackground } from "@/components/screen-background";
 import { useColors } from "@/hooks/use-colors";
-import { startOAuthLogin } from "@/constants/oauth";
 import { setSelectedAccountType } from "@/lib/account-type";
 import { LegalFooter } from "@/components/legal-footer";
 import { track } from "@/lib/analytics";
@@ -45,12 +44,12 @@ export default function SelectAccountScreen() {
     try {
       track("signup_started", { account_type: "contractor" });
       await setSelectedAccountType("contractor");
-      await startOAuthLogin({ accountType: "contractor" });
+      router.push("/signup?accountType=contractor" as never);
     } catch (error) {
-      console.warn("[OAuth] Failed to start contractor login:", error);
+      console.warn("[Auth] Failed to route contractor signup:", error);
       setOauthStarting(false);
     } finally {
-      if (Platform.OS !== "web") setOauthStarting(false);
+      setOauthStarting(false);
     }
   };
 
@@ -60,28 +59,28 @@ export default function SelectAccountScreen() {
     try {
       track("signup_started", { account_type: "customer" });
       await setSelectedAccountType("customer");
-      await startOAuthLogin({ accountType: "customer" });
+      router.push("/signup?accountType=customer" as never);
     } catch (error) {
-      console.warn("[OAuth] Failed to start customer login:", error);
+      console.warn("[Auth] Failed to route customer signup:", error);
       setOauthStarting(false);
     } finally {
-      if (Platform.OS !== "web") setOauthStarting(false);
+      setOauthStarting(false);
     }
   };
 
-  /** Same OAuth as contractors; post-login sends admins to `/admin`, others to the app. */
+  /** Admin login keeps redirect intent so post-login destination enforcement stays intact. */
   const handleAdminAccess = async () => {
     if (oauthStarting) return;
     setOauthStarting(true);
     try {
       await setPostLoginRedirect("/admin");
       await setSelectedAccountType("contractor");
-      await startOAuthLogin({ accountType: "contractor" });
+      router.push("/login?accountType=contractor&admin=1" as never);
     } catch (error) {
-      console.warn("[OAuth] Failed to start admin login:", error);
+      console.warn("[Auth] Failed to route admin login:", error);
       setOauthStarting(false);
     } finally {
-      if (Platform.OS !== "web") setOauthStarting(false);
+      setOauthStarting(false);
     }
   };
 
