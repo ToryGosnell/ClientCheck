@@ -254,3 +254,61 @@ export async function resendVerificationEmail(input: {
 }): Promise<boolean> {
   return emailVerification.resendVerificationEmail(input.userId, normalizeEmail(input.email), input.baseUrl);
 }
+
+/**
+ * Seed first-party admin account from env vars on startup.
+ * Safe-by-default behavior:
+ * - no-op when env vars are missing
+ * - no-op when email already exists
+ * - never overwrites existing users/roles/passwords
+ */
+export async function seedAdminUserFromEnv(): Promise<
+  | { status: "skipped_missing_env" }
+  | { status: "skipped_exists"; email: string }
+  | { status: "created"; email: string; userId: number }
+> {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const rawEmail = process.env.ADMIN_SEED_EMAIL ?? "";
+  const rawPassword = process.env.ADMIN_SEED_PASSWORD ?? "";
+  const emailNormalized = normalizeEmail(rawEmail);
+  const password = rawPassword.trim();
+
+  if (!emailNormalized || !password) {
+    return { status: "skipped_missing_env" };
+  }
+
+  if (!emailNormalized.includes("@")) {
+    throw new Error("ADMIN_SEED_EMAIL must be a valid email");
+  }
+
+  if (password.length < 8) {
+    throw new Error("ADMIN_SEED_PASSWORD must be at least 8 characters");
+  }
+
+  const existing = await getUserByEmailNormalized(emailNormalized);
+  if (existing) {
+    return { status: "skipped_exists", email: emailNormalized };
+  }
+
+  const now = new Date();
+  const passwordHash = await hashPassword(password);
+  const result = await db.insert(users).values({
+    openId: makeSyntheticOpenId(),
+    name: "Admin",
+    email: emailNormalized,
+    emailNormalized,
+    passwordHash,
+    loginMethod: "password",
+    role: "admin",
+    termsAcceptedAt: now,
+    privacyAcceptedAt: now,
+    lastSignedIn: now,
+  });
+
+  const userId = Number((result[0] as { insertId?: number })?.insertId ?? 0);
+  if (!userId) throw new Error("Failed to seed admin user");
+
+  return { status: "created", email: emailNormalized, userId };
+}

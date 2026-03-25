@@ -3,6 +3,7 @@ import express from "express";
 import * as Sentry from "@sentry/node";
 import { nodeProfilingIntegration } from "@sentry/profiling-node";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
+import { seedAdminUserFromEnv } from "../auth-service";
 import { registerFirstPartyAuthRoutes } from "./auth";
 import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
@@ -30,6 +31,19 @@ async function startServer() {
     }
 
     const app = express();
+
+    try {
+      const seeded = await seedAdminUserFromEnv();
+      if (seeded.status === "created") {
+        console.log(`[Auth Seed] Created admin user: ${seeded.email} (id=${seeded.userId})`);
+      } else if (seeded.status === "skipped_exists") {
+        console.log(`[Auth Seed] Admin seed email already exists: ${seeded.email}`);
+      } else {
+        console.log("[Auth Seed] Skipped (ADMIN_SEED_EMAIL/ADMIN_SEED_PASSWORD not set)");
+      }
+    } catch (seedErr) {
+      console.error("[Auth Seed] Failed to seed admin user:", seedErr);
+    }
 
     // Critical: before other routes — liveness for Railway / monitors
     app.get("/api/health", (_req, res) => {
