@@ -4,6 +4,7 @@ import { useColors } from "@/hooks/use-colors";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import * as Haptics from "expo-haptics";
+import { useAdminPaywallBypassRedirect } from "@/hooks/use-admin-paywall-bypass-redirect";
 
 const TRADE_TYPES = [
   "Electrician",
@@ -22,6 +23,7 @@ const TRADE_TYPES = [
 export default function OnboardingScreen() {
   const router = useRouter();
   const colors = useColors();
+  useAdminPaywallBypassRedirect();
   const [step, setStep] = useState(1);
   const [selectedTrade, setSelectedTrade] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);

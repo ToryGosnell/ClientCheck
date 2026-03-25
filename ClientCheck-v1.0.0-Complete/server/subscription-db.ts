@@ -1,10 +1,11 @@
 import { eq } from "drizzle-orm";
-import { subscriptions } from "../drizzle/schema";
+import { subscriptions, users } from "../drizzle/schema";
 import { getDb } from "./db";
 import {
   CONTRACTOR_ANNUAL_PRICE_CENTS,
+  CONTRACTOR_PRO_MONTHLY_PRICE_CENTS,
   CUSTOMER_MONTHLY_PRICE_CENTS,
-  type BillingPlanType,
+  type DbSubscriptionPlanType,
 } from "../shared/billing-config";
 
 const TRIAL_DAYS = 365;
@@ -50,11 +51,15 @@ export async function upgradeToSubscription(
 
   const resolvedPlan = resolvePlanType(planType);
   const now = new Date();
-  const daysInPlan = resolvedPlan === "customer_monthly" ? 30 : 365;
+  const daysInPlan =
+    resolvedPlan === "customer_monthly" || resolvedPlan === "contractor_pro_monthly" ? 30 : 365;
   const subscriptionEndsAt = new Date(now.getTime() + daysInPlan * 24 * 60 * 60 * 1000);
-  const amountCents = resolvedPlan === "customer_monthly"
-    ? CUSTOMER_MONTHLY_PRICE_CENTS
-    : CONTRACTOR_ANNUAL_PRICE_CENTS;
+  const amountCents =
+    resolvedPlan === "customer_monthly"
+      ? CUSTOMER_MONTHLY_PRICE_CENTS
+      : resolvedPlan === "contractor_pro_monthly"
+        ? CONTRACTOR_PRO_MONTHLY_PRICE_CENTS
+        : CONTRACTOR_ANNUAL_PRICE_CENTS;
 
   const existing = await getSubscription(userId);
   const values = {
@@ -117,7 +122,7 @@ export async function linkStripeCustomer(
 export async function activateStripeSubscription(
   userId: number,
   stripeSubscriptionId: string,
-  planType: BillingPlanType,
+  planType: DbSubscriptionPlanType,
   periodEnd?: Date,
 ) {
   const db = await getDb();
@@ -150,7 +155,79 @@ export async function checkSubscriptionStatus(userId: number, openId: string) {
     };
   }
 
+  const database = await getDb();
+  if (!database) {
+    return {
+      isActive: false, isOwner: false, status: "no_subscription",
+      daysRemaining: null, shouldShowCardPrompt: false, shouldSendReminder: false,
+    };
+  }
+
+  const [userRow] = await database
+    .select({ role: users.role, isVerified: users.isVerified })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+
+  /** Full app preview in admin sessions — does not grant Stripe entitlements. */
+  if (userRow?.role === "admin") {
+    return {
+      isActive: true,
+      isOwner: true,
+      status: "owner",
+      daysRemaining: null,
+      shouldShowCardPrompt: false,
+      shouldSendReminder: false,
+    };
+  }
+
   const sub = await getSubscription(userId);
+
+  if (userRow?.role === "customer") {
+    const now = new Date();
+    const paidIdentitySub =
+      !!sub &&
+      sub.planType === "customer_monthly" &&
+      (sub.status === "active" || sub.status === "trial") &&
+      !!sub.subscriptionEndsAt &&
+      sub.subscriptionEndsAt > now;
+
+    if (paidIdentitySub && sub.subscriptionEndsAt) {
+      const daysRemaining = Math.ceil(
+        (sub.subscriptionEndsAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000),
+      );
+      return {
+        isActive: true,
+        isOwner: false,
+        status: "active",
+        daysRemaining,
+        shouldShowCardPrompt: false,
+        shouldSendReminder: false,
+      };
+    }
+
+    /** One-time Checkout identity verification (webhook sets users.isVerified). */
+    if (userRow.isVerified) {
+      return {
+        isActive: true,
+        isOwner: false,
+        status: "active",
+        daysRemaining: null,
+        shouldShowCardPrompt: false,
+        shouldSendReminder: false,
+      };
+    }
+
+    return {
+      isActive: true,
+      isOwner: false,
+      status: "customer_free",
+      daysRemaining: null,
+      shouldShowCardPrompt: false,
+      shouldSendReminder: false,
+    };
+  }
+
   if (!sub) {
     return {
       isActive: false, isOwner: false, status: "no_subscription",
@@ -228,6 +305,46 @@ export async function markRenewalReminderSent(userId: number, milestone?: number
 
 // ── Exports ───────────────────────────────────────────────────────────────────
 
+/**
+ * Push subscription/trial end dates forward by referral rewards (best-effort; Stripe-managed periods may need dashboard sync).
+ */
+export async function extendSubscriptionEndDate(userId: number, newEnd: Date): Promise<void> {
+  const db = await getDb();
+  if (!db) return;
+  const now = new Date();
+  const sub = await getSubscription(userId);
+  if (!sub) {
+    await db.insert(subscriptions).values({
+      userId,
+      status: "trial",
+      planType: "none",
+      trialStartedAt: now,
+      trialEndsAt: newEnd,
+      subscriptionStartedAt: now,
+      subscriptionEndsAt: newEnd,
+      nextBillingDate: newEnd,
+    } as Record<string, unknown>);
+    return;
+  }
+
+  const nextTrial = sub.trialEndsAt
+    ? new Date(Math.max(sub.trialEndsAt.getTime(), newEnd.getTime()))
+    : newEnd;
+  const nextSub = sub.subscriptionEndsAt
+    ? new Date(Math.max(sub.subscriptionEndsAt.getTime(), newEnd.getTime()))
+    : newEnd;
+  const billing = nextSub.getTime() > nextTrial.getTime() ? nextSub : nextTrial;
+  await db
+    .update(subscriptions)
+    .set({
+      trialEndsAt: nextTrial,
+      subscriptionEndsAt: nextSub,
+      nextBillingDate: billing,
+      updatedAt: now,
+    })
+    .where(eq(subscriptions.userId, userId));
+}
+
 export const SUBSCRIPTION_PRICE = 9.99;
 export const SUBSCRIPTION_PRICE_YEAR = 120.0;
 export const TRIAL_DAYS_COUNT = TRIAL_DAYS;
@@ -243,9 +360,12 @@ export function getPricingInfo() {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-function resolvePlanType(plan?: string | null): BillingPlanType {
+function resolvePlanType(plan?: string | null): DbSubscriptionPlanType {
   if (!plan) return "contractor_annual";
-  if (plan === "monthly" || plan === "customer_monthly") return "customer_monthly";
+  if (plan === "contractor_pro_monthly") return "contractor_pro_monthly";
+  if (plan === "monthly" || plan === "customer_monthly" || plan === "customer_identity_verification") {
+    return "customer_monthly";
+  }
   if (plan === "yearly" || plan === "annual_paid" || plan === "contractor_annual") return "contractor_annual";
   return "contractor_annual";
 }

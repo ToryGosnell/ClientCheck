@@ -1,5 +1,5 @@
 import cron, { ScheduledTask } from "node-cron";
-import { and, eq, gte, lte } from "drizzle-orm";
+import { and, eq, gte, isNull, lte } from "drizzle-orm";
 import { subscriptions, users } from "../drizzle/schema";
 import { sendTrialExpiringEmail, sendTrialExpiredEmail } from "./email-service";
 import { markReminderSent } from "./subscription-db";
@@ -55,7 +55,9 @@ async function getUsersNeedingReminders(): Promise<{
         and(
           eq(subscriptions.status, "trial"),
           gte(subscriptions.trialEndsAt, now),
-          lte(subscriptions.trialEndsAt, in3Days)
+          lte(subscriptions.trialEndsAt, in3Days),
+          eq(users.accountStatus, "active"),
+          isNull(users.deletedAt),
         )
       )) as Row[];
 
@@ -67,7 +69,9 @@ async function getUsersNeedingReminders(): Promise<{
         and(
           eq(subscriptions.status, "trial"),
           gte(subscriptions.trialEndsAt, startOfToday),
-          lte(subscriptions.trialEndsAt, endOfToday)
+          lte(subscriptions.trialEndsAt, endOfToday),
+          eq(users.accountStatus, "active"),
+          isNull(users.deletedAt),
         )
       )) as Row[];
 

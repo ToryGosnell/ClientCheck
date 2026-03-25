@@ -4,6 +4,7 @@ import { ScreenContainer } from "@/components/screen-container";
 import { useColors } from "@/hooks/use-colors";
 import { useLocalSearchParams } from "expo-router";
 import { trpc } from "@/lib/trpc";
+import { CustomerIdentityVerifiedBadge } from "@/components/customer-identity-verified-badge";
 
 interface RiskEvent {
   date: string;
@@ -79,9 +80,14 @@ export default function CustomerIntelligenceScreen() {
           <View>
             <Text className="text-3xl font-bold text-foreground">Customer Intelligence</Text>
             {customer && (
-              <Text className="text-sm text-muted mt-1">
-                {customer.firstName} {customer.lastName}
-              </Text>
+              <View className="flex-row items-center gap-2 flex-wrap mt-1">
+                <Text className="text-sm text-muted">
+                  {customer.firstName} {customer.lastName}
+                </Text>
+                {(customer as { identityVerified?: boolean }).identityVerified ? (
+                  <CustomerIdentityVerifiedBadge size="sm" />
+                ) : null}
+              </View>
             )}
           </View>
 

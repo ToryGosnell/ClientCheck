@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { eq, like, desc, or, sql, and, gte, isNotNull } from "drizzle-orm";
+import { eq, like, desc, or, sql, and, gte, isNotNull, inArray } from "drizzle-orm";
 import { adminProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
+import * as dbModule from "./db";
 import {
   users,
   reviews,
@@ -10,6 +11,8 @@ import {
   stripePayments,
   adminAuditLog,
   reviewModerations,
+  contractorProfiles,
+  customers,
 } from "../drizzle/schema";
 import Stripe from "stripe";
 
@@ -18,6 +21,9 @@ const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SEC
 async function logAction(adminId: number, action: string, targetType: string, targetId?: string | number, details?: string) {
   const db = await getDb();
   if (!db) return;
+  console.log(
+    `[admin-audit] adminUserId=${adminId} action=${action} target=${targetType}:${targetId ?? "—"}${details ? ` details=${details.slice(0, 200)}` : ""}`,
+  );
   await db.insert(adminAuditLog).values({
     adminUserId: adminId,
     action,
@@ -34,7 +40,11 @@ export const adminRouter = router({
   stats: adminProcedure.query(async () => {
     const db = await getDb();
     const zero = {
-      totalUsers: 0, totalReviews: 0,
+      totalUsers: 0,
+      totalReviews: 0,
+      totalContractors: 0,
+      totalCustomers: 0,
+      pendingContractorVerifications: 0,
       activeContractors: 0, freeYearContractors: 0, renewalsDueSoon: 0, activePaid: 0,
       pendingDisputes: 0, flaggedReviews: 0,
       revenue30d: 0, refunds30d: 0,
@@ -59,6 +69,22 @@ export const adminRouter = router({
 
     const [totalUsers] = await db.select({ c: sql<number>`count(*)` }).from(users);
     const [totalReviews] = await db.select({ c: sql<number>`count(*)` }).from(reviews);
+
+    const [totalContractors] = await db
+      .select({ c: sql<number>`count(*)` })
+      .from(users)
+      .where(inArray(users.role, ["contractor", "user"]));
+    const [totalCustomers] = await db.select({ c: sql<number>`count(*)` }).from(users).where(eq(users.role, "customer"));
+    let pendingContractorVerifications = 0;
+    try {
+      const [pcv] = await db
+        .select({ c: sql<number>`count(*)` })
+        .from(contractorProfiles)
+        .where(eq(contractorProfiles.verificationStatus, "pending"));
+      pendingContractorVerifications = n(pcv);
+    } catch {
+      /* schema drift */
+    }
 
     const [activeContractors] = await db.select({ c: sql<number>`count(*)` }).from(subscriptions)
       .where(or(eq(subscriptions.status, "active"), eq(subscriptions.status, "trial")));
@@ -156,6 +182,9 @@ export const adminRouter = router({
     return {
       totalUsers: n(totalUsers),
       totalReviews: n(totalReviews),
+      totalContractors: n(totalContractors),
+      totalCustomers: n(totalCustomers),
+      pendingContractorVerifications,
       activeContractors: actC,
       freeYearContractors: n(freeYear),
       renewalsDueSoon: n(renewals),
@@ -188,6 +217,249 @@ export const adminRouter = router({
         ? db.select().from(users).where(or(like(users.name, `%${q}%`), like(users.email, `%${q}%`)))
         : db.select().from(users);
       return base.orderBy(desc(users.createdAt)).limit(input.limit).offset(input.offset);
+    }),
+
+  /** Users + subscription row + contractor verification (one row per user; best-effort joins). */
+  listUsersAdmin: adminProcedure
+    .input(z.object({ query: z.string().default(""), limit: z.number().default(50), offset: z.number().default(0) }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const q = input.query.trim();
+      const sel = {
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        role: users.role,
+        isVerified: users.isVerified,
+        accountStatus: users.accountStatus,
+        createdAt: users.createdAt,
+        subStatus: subscriptions.status,
+        subPlan: subscriptions.planType,
+        contractorVerification: contractorProfiles.verificationStatus,
+      };
+      const base = db
+        .select(sel)
+        .from(users)
+        .leftJoin(subscriptions, eq(subscriptions.userId, users.id))
+        .leftJoin(contractorProfiles, eq(contractorProfiles.userId, users.id));
+      if (q) {
+        return base
+          .where(or(like(users.name, `%${q}%`), like(users.email, `%${q}%`)))
+          .orderBy(desc(users.createdAt))
+          .limit(input.limit)
+          .offset(input.offset);
+      }
+      return base.orderBy(desc(users.createdAt)).limit(input.limit).offset(input.offset);
+    }),
+
+  updateUserRole: adminProcedure
+    .input(
+      z.object({
+        userId: z.number(),
+        role: z.enum(["user", "admin", "contractor", "customer"]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.userId === ctx.user.id && input.role !== "admin") {
+        throw new Error("You cannot remove your own admin role.");
+      }
+      const database = await getDb();
+      if (!database) throw new Error("Database not available");
+      await database.update(users).set({ role: input.role }).where(eq(users.id, input.userId));
+      await logAction(ctx.user.id, "update_user_role", "user", input.userId, `role=${input.role}`);
+      return { success: true as const };
+    }),
+
+  setUserAccountStatus: adminProcedure
+    .input(
+      z.object({
+        userId: z.number(),
+        status: z.enum(["active", "suspended", "deleted"]),
+        reason: z.string().max(500).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.userId === ctx.user.id && input.status !== "active") {
+        throw new Error("You cannot suspend or delete your own account from the admin console.");
+      }
+      const database = await getDb();
+      if (!database) throw new Error("Database not available");
+      await database.update(users).set({ accountStatus: input.status }).where(eq(users.id, input.userId));
+      await logAction(
+        ctx.user.id,
+        "set_account_status",
+        "user",
+        input.userId,
+        `${input.status}${input.reason ? `: ${input.reason}` : ""}`,
+      );
+      return { success: true as const };
+    }),
+
+  dashboardFeed: adminProcedure.query(async () => {
+    const db = await getDb();
+    if (!db) {
+      return { recentDisputes: [] as unknown[], pendingVerifications: [] as unknown[], flaggedReviews: [] as unknown[] };
+    }
+    const recentDisputes = await db.select().from(reviewDisputes).orderBy(desc(reviewDisputes.createdAt)).limit(10);
+    const pendingVerifications = await db
+      .select({
+        userId: contractorProfiles.userId,
+        trade: contractorProfiles.trade,
+        licenseNumber: contractorProfiles.licenseNumber,
+        company: contractorProfiles.company,
+        verificationSubmittedAt: contractorProfiles.verificationSubmittedAt,
+      })
+      .from(contractorProfiles)
+      .where(eq(contractorProfiles.verificationStatus, "pending"))
+      .orderBy(desc(contractorProfiles.verificationSubmittedAt))
+      .limit(12);
+    const flaggedReviews = await db
+      .select({
+        id: reviews.id,
+        moderationStatus: reviews.moderationStatus,
+        overallRating: reviews.overallRating,
+        reviewText: reviews.reviewText,
+        customerId: reviews.customerId,
+        createdAt: reviews.createdAt,
+        hiddenAt: reviews.hiddenAt,
+      })
+      .from(reviews)
+      .where(
+        or(
+          isNotNull(reviews.hiddenAt),
+          inArray(reviews.moderationStatus, ["hidden_flagged", "under_investigation", "removed"]),
+        ),
+      )
+      .orderBy(desc(reviews.createdAt))
+      .limit(14);
+    return { recentDisputes, pendingVerifications, flaggedReviews };
+  }),
+
+  globalSearch: adminProcedure
+    .input(z.object({ q: z.string().min(1).max(120) }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return { users: [], customers: [], reviews: [] };
+      const raw = input.q.trim();
+      const term = `%${raw}%`;
+      const userRows = await db
+        .select({ id: users.id, name: users.name, email: users.email, role: users.role })
+        .from(users)
+        .where(or(like(users.name, term), like(users.email, term)))
+        .limit(12);
+      const custRows = await db
+        .select({
+          id: customers.id,
+          firstName: customers.firstName,
+          lastName: customers.lastName,
+          phone: customers.phone,
+          city: customers.city,
+          state: customers.state,
+        })
+        .from(customers)
+        .where(
+          or(
+            like(customers.firstName, term),
+            like(customers.lastName, term),
+            like(customers.phone, term),
+            like(customers.city, term),
+            like(customers.state, term),
+            like(customers.searchText, term),
+          ),
+        )
+        .limit(12);
+      const revRows = await db
+        .select({
+          id: reviews.id,
+          customerId: reviews.customerId,
+          overallRating: reviews.overallRating,
+          reviewText: reviews.reviewText,
+        })
+        .from(reviews)
+        .where(like(reviews.reviewText, term))
+        .limit(8);
+      return { users: userRows, customers: custRows, reviews: revRows };
+    }),
+
+  getCustomerAdmin: adminProcedure
+    .input(z.object({ customerId: z.number() }))
+    .query(async ({ input }) => {
+      const customer = await dbModule.getCustomerById(input.customerId);
+      if (!customer) return null;
+      const reviewData = await dbModule.getReviewsForCustomer(input.customerId);
+      const db = await getDb();
+      const disputes = db
+        ? await db
+            .select()
+            .from(reviewDisputes)
+            .where(eq(reviewDisputes.customerId, input.customerId))
+            .orderBy(desc(reviewDisputes.createdAt))
+            .limit(80)
+        : [];
+      return {
+        customer,
+        reviews: reviewData?.reviews ?? [],
+        disputes,
+      };
+    }),
+
+  /** Directory customers (not user accounts) — search by name, phone, location, searchText. */
+  listCustomersAdmin: adminProcedure
+    .input(z.object({ query: z.string().default(""), limit: z.number().min(1).max(100).default(50) }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      const q = input.query.trim();
+      const term = `%${q}%`;
+      const cols = {
+        id: customers.id,
+        firstName: customers.firstName,
+        lastName: customers.lastName,
+        phone: customers.phone,
+        city: customers.city,
+        state: customers.state,
+        riskLevel: customers.riskLevel,
+        reviewCount: customers.reviewCount,
+        overallRating: customers.overallRating,
+        redFlagCount: customers.redFlagCount,
+      };
+      const base = db.select(cols).from(customers);
+      if (!q) {
+        return base.orderBy(desc(customers.createdAt)).limit(input.limit);
+      }
+      return base
+        .where(
+          or(
+            like(customers.firstName, term),
+            like(customers.lastName, term),
+            like(customers.phone, term),
+            like(customers.city, term),
+            like(customers.state, term),
+            like(customers.searchText, term),
+          ),
+        )
+        .orderBy(desc(customers.createdAt))
+        .limit(input.limit);
+    }),
+
+  listPendingContractorVerifications: adminProcedure
+    .input(z.object({ limit: z.number().default(50) }))
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) return [];
+      return db
+        .select({
+          userId: contractorProfiles.userId,
+          trade: contractorProfiles.trade,
+          licenseNumber: contractorProfiles.licenseNumber,
+          company: contractorProfiles.company,
+          verificationSubmittedAt: contractorProfiles.verificationSubmittedAt,
+        })
+        .from(contractorProfiles)
+        .where(eq(contractorProfiles.verificationStatus, "pending"))
+        .orderBy(desc(contractorProfiles.verificationSubmittedAt))
+        .limit(input.limit);
     }),
 
   // ─── Reviews ─────────────────────────────────────────────────────────────────

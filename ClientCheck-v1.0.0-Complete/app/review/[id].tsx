@@ -7,7 +7,7 @@ import { StarRating } from "@/components/star-rating";
 import { FlagReviewModal } from "@/components/flag-review-modal";
 import { CustomerResponseSection } from "@/components/customer-response-section";
 import { useColors } from "@/hooks/use-colors";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuthWithLoginRedirect } from "@/hooks/use-auth-with-login-redirect";
 import { trpc } from "@/lib/trpc";
 import { track } from "@/lib/analytics";
 import {
@@ -26,32 +26,43 @@ import {
   isContractorVerificationBadge,
   meetsVerifiedReportCriteria,
 } from "@/shared/trust-labels";
+import { CustomerIdentityVerifiedBadge } from "@/components/customer-identity-verified-badge";
 
 export default function ReviewDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const colors = useColors();
-  const { user } = useAuth();
+  const { user, contentReady } = useAuthWithLoginRedirect();
   const reviewId = parseInt(id ?? "0", 10);
   const [showFlagModal, setShowFlagModal] = useState(false);
 
   const { data: review, isLoading } = trpc.reviews.getById.useQuery(
     { id: reviewId },
-    { enabled: !!reviewId },
+    { enabled: contentReady && !!reviewId },
   );
 
   const { data: disputeRows } = trpc.disputes.getDisputesByReview.useQuery(
     { reviewId },
-    { enabled: reviewId > 0 },
+    { enabled: contentReady && reviewId > 0 },
   );
   const { data: customerResp } = trpc.customerResponse.get.useQuery(
     { reviewId },
-    { enabled: reviewId > 0 },
+    { enabled: contentReady && reviewId > 0 },
   );
 
   useEffect(() => {
     if (review) track("review_viewed", { review_id: reviewId });
   }, [review?.id]);
+
+  if (!contentReady) {
+    return (
+      <ScreenBackground backgroundKey="auth" overlayOpacity={0.9}>
+        <ScreenContainer className="flex-1 items-center justify-center">
+          <ActivityIndicator color={colors.primary} size="large" />
+        </ScreenContainer>
+      </ScreenBackground>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -113,6 +124,7 @@ export default function ReviewDetailScreen() {
     ? `${(review as any).customerFirstName} ${(review as any).customerLastName}`
     : null;
   const customerLoc = [(review as any).customerCity, (review as any).customerState].filter(Boolean).join(", ");
+  const customerIdentityVerified = !!(review as { customerIdentityVerified?: boolean }).customerIdentityVerified;
 
   const showVerifiedContractor = isContractorVerificationBadge((review as any).contractorVerified);
   const verifiedReport = meetsVerifiedReportCriteria(review);
@@ -194,7 +206,10 @@ export default function ReviewDetailScreen() {
               style={({ pressed }) => [s.sectionCard, { backgroundColor: colors.surface, borderColor: "rgba(255,255,255,0.06)" }, pressed && { opacity: 0.8 }]}
             >
               <Text style={[s.sectionLabel, { color: colors.muted }]}>CUSTOMER REVIEWED</Text>
-              <Text style={[s.customerNameText, { color: colors.foreground }]}>{customerName}</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <Text style={[s.customerNameText, { color: colors.foreground }]}>{customerName}</Text>
+                {customerIdentityVerified ? <CustomerIdentityVerifiedBadge size="sm" /> : null}
+              </View>
               {!!customerLoc && <Text style={{ color: colors.muted, fontSize: 13, marginTop: 2 }}>📍 {customerLoc}</Text>}
             </Pressable>
           )}

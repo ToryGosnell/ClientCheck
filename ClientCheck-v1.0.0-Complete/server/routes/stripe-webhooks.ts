@@ -1,46 +1,17 @@
-import { Router, Request, Response } from "express";
-import { verifyStripeWebhook, handleStripeWebhookEvent } from "@/server/stripe-webhook-handler";
+import { Router, type Request, type Response } from "express";
+import { handleStripeWebhookHttp } from "@/server/stripe-webhook-handler";
 
 /**
- * Stripe Webhook Handler
- * Listens for: successful payment, failed payment, subscription updates, refunds.
- * Keeps app accurate even if the user closes the app mid-payment (server-side source of truth).
+ * Optional Express router for Stripe webhooks.
+ *
+ * Production uses `POST /api/webhooks/stripe` in `server/_core/index.ts` with `express.raw()` + `handleStripeWebhookHttp`.
+ * If you mount this router, you MUST apply `express.raw({ type: [...] })` on the same path so `req.body` is a Buffer.
  */
 
 const router = Router();
 
-/**
- * POST / (mounted at /api/webhooks/stripe)
- * Requires raw body for Stripe signature verification. Idempotent (duplicate events return 200).
- */
-router.post("/", async (req: Request, res: Response) => {
-  const signature = req.headers["stripe-signature"] as string;
-  if (!signature) {
-    return res.status(400).json({ error: "Missing stripe-signature header" });
-  }
-
-  const rawBody: Buffer | string | undefined = (req as any).rawBody;
-  if (!rawBody) {
-    console.error("[Stripe webhook] rawBody is missing. req.body type:", typeof req.body,
-      "isBuffer:", Buffer.isBuffer(req.body), "bodyLength:", req.body?.length ?? "n/a");
-    return res.status(400).json({ error: "Raw body unavailable for signature verification" });
-  }
-
-  let event;
-  try {
-    event = verifyStripeWebhook(rawBody, signature);
-  } catch (err) {
-    console.error("[Stripe webhook] Signature verification failed:", (err as Error).message);
-    return res.status(400).json({ error: "Webhook signature verification failed", detail: (err as Error).message });
-  }
-
-  try {
-    const result = await handleStripeWebhookEvent(event);
-    return res.json({ success: true, eventId: event.id, alreadyProcessed: result.alreadyProcessed ?? false });
-  } catch (err) {
-    console.error("[Stripe webhook] Event processing failed:", err);
-    return res.status(500).json({ error: "Webhook event processing failed", eventId: event.id });
-  }
+router.post("/", (req: Request, res: Response, next) => {
+  void handleStripeWebhookHttp(req, res).catch(next);
 });
 
 export default router;

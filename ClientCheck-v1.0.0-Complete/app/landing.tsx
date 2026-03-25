@@ -3,6 +3,11 @@ import { ScrollView, View, Text, Pressable, Image, Linking } from "react-native"
 import { ScreenContainer } from "@/components/screen-container";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
+import {
+  CONTRACTOR_PRO_ANNUAL_PRICE_DISPLAY,
+  CONTRACTOR_PRO_MONTHLY_PRICE_DISPLAY,
+  CUSTOMER_NO_SUBSCRIPTION_REQUIRED_LINE,
+} from "@/shared/billing-config";
 
 function openAccount(router: ReturnType<typeof useRouter>, preset: "contractor" | "customer") {
   router.push({ pathname: "/select-account", params: { preset } } as never);
@@ -196,11 +201,10 @@ export default function LandingScreen() {
             <View className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 gap-2">
               <Text className="text-lg font-semibold text-white">💰 Subscription Plans</Text>
               <Text className="text-sm text-gray-300">
-                Contractors: 12 months free to start, then $120/year — or monthly options in app.
+                Contractors: free tier with limited searches; Pro {CONTRACTOR_PRO_MONTHLY_PRICE_DISPLAY}/mo or{" "}
+                {CONTRACTOR_PRO_ANNUAL_PRICE_DISPLAY}/yr for unlimited search, risk scores, red flags, and alerts.
               </Text>
-              <Text className="text-sm text-gray-300">
-                Customers: free accounts to view and dispute; paid options where required for disputes (see app).
-              </Text>
+              <Text className="text-sm text-gray-300">{CUSTOMER_NO_SUBSCRIPTION_REQUIRED_LINE}</Text>
             </View>
             <View className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 gap-2">
               <Text className="text-lg font-semibold text-white">🤝 Referral Rewards</Text>
@@ -214,20 +218,27 @@ export default function LandingScreen() {
           <View className="gap-4">
             <Text className="text-2xl font-bold text-white">Simple contractor pricing</Text>
             <Text className="text-sm text-gray-300 text-center">
-              Start with a full year on us; renew at $120/year when you are ready. No surprise charges — reminders before renewal.
+              Contractor Pro: unlimited search, risk scores, red flags, and alerts. Upgrade when you outgrow the free
+              tier.
             </Text>
             <View className="flex-row gap-3">
               <View className="flex-1 bg-blue-600/50 border border-blue-400 rounded-xl p-4 gap-2">
-                <Text className="text-lg font-bold text-white">Monthly</Text>
-                <Text className="text-3xl font-bold text-white">$9.99</Text>
+                <Text className="text-lg font-bold text-white">Pro · Monthly</Text>
+                <Text className="text-3xl font-bold text-white">{CONTRACTOR_PRO_MONTHLY_PRICE_DISPLAY}</Text>
                 <Text className="text-xs text-blue-200">/month</Text>
               </View>
               <View className="flex-1 bg-green-600/50 border border-green-400 rounded-xl p-4 gap-2">
-                <Text className="text-lg font-bold text-white">Yearly</Text>
-                <Text className="text-3xl font-bold text-white">$120</Text>
-                <Text className="text-xs text-green-200">/year (save 17%)</Text>
+                <Text className="text-lg font-bold text-white">Pro · Yearly</Text>
+                <Text className="text-3xl font-bold text-white">{CONTRACTOR_PRO_ANNUAL_PRICE_DISPLAY}</Text>
+                <Text className="text-xs text-green-200">/year</Text>
               </View>
             </View>
+            <Pressable
+              onPress={() => router.push("/pricing" as never)}
+              className="py-2 items-center"
+            >
+              <Text className="text-sm text-blue-300 font-semibold">Full pricing →</Text>
+            </Pressable>
           </View>
 
           {/* QR Code Section */}
@@ -260,8 +271,8 @@ export default function LandingScreen() {
               ]}
               className="bg-blue-600 rounded-xl py-4 items-center"
             >
-              <Text className="text-white font-bold text-lg">Start free — 12 months</Text>
-              <Text className="text-blue-100 text-xs mt-1">Then $120/year · No card to start</Text>
+              <Text className="text-white font-bold text-lg">Start contractor free tier</Text>
+              <Text className="text-blue-100 text-xs mt-1">Limited searches · Pro in app · No card to start</Text>
             </Pressable>
 
             <Pressable
@@ -297,11 +308,9 @@ export default function LandingScreen() {
           {/* Footer */}
           <View className="items-center gap-2 pb-4">
             <Text className="text-xs text-gray-400">
-              Contractors: 12 months free • $120/year after • Cancel anytime
+              Contractors: Free tier • Pro {CONTRACTOR_PRO_MONTHLY_PRICE_DISPLAY}/mo or {CONTRACTOR_PRO_ANNUAL_PRICE_DISPLAY}/yr
             </Text>
-            <Text className="text-xs text-gray-400">
-              Customers: Free accounts • Disputes & transparency • Fair process
-            </Text>
+            <Text className="text-xs text-gray-400">{CUSTOMER_NO_SUBSCRIPTION_REQUIRED_LINE}</Text>
             <View className="flex-row gap-4 mt-2">
               <Pressable onPress={() => openLink("https://clientcheck.app/privacy")}>
                 <Text className="text-xs text-blue-400">Privacy</Text>

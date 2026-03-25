@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Platform } from "react-native";
 import { DEMO_MODE, DEMO_USER } from "@/lib/demo-data";
 import { identify, reset as resetAnalytics, track } from "@/lib/analytics";
+import { trackSignupCompletedIfNew } from "@/lib/signup-completed-analytics";
+import { clearPostLoginRedirect } from "@/lib/post-login-redirect";
+import { clearPendingContractorInviteReferrer } from "@/lib/contractor-invite-pending";
+import { clearPendingShareReferrer } from "@/lib/share-referral-pending";
 
 export type AuthState = "loading" | "authenticated" | "unauthenticated";
 
@@ -18,6 +22,9 @@ function makeDemoUser(): Auth.User {
     name: DEMO_USER.name,
     email: DEMO_USER.email,
     loginMethod: DEMO_USER.loginMethod,
+    role: DEMO_USER.role,
+    isVerified: false,
+    verifiedAt: null,
     lastSignedIn: new Date(DEMO_USER.lastSignedIn),
   };
 }
@@ -54,18 +61,26 @@ export function useAuth(options?: UseAuthOptions) {
         const apiUser = await Api.getMe();
 
         if (apiUser) {
-          const userInfo: Auth.User = {
-            id: apiUser.id,
-            openId: apiUser.openId,
-            name: apiUser.name,
-            email: apiUser.email,
-            loginMethod: apiUser.loginMethod,
-            role: (apiUser as any).role ?? "user",
-            lastSignedIn: new Date(apiUser.lastSignedIn),
-          };
-          setUser(userInfo);
-          setAuthState("authenticated");
-          await Auth.setUserInfo(userInfo);
+          if (apiUser.id == null) {
+            await Auth.clearUserInfo();
+            setUser(null);
+            setAuthState("unauthenticated");
+            return;
+          }
+          try {
+            const userInfo = Auth.userFromApiJson(apiUser as unknown as Record<string, unknown>);
+            setUser(userInfo);
+            setAuthState("authenticated");
+            await Auth.setUserInfo(userInfo);
+            void trackSignupCompletedIfNew({
+              id: apiUser.id,
+              isNewUser: apiUser.isNewUser === true,
+            });
+          } catch {
+            await Auth.clearUserInfo();
+            setUser(null);
+            setAuthState("unauthenticated");
+          }
         } else {
           // Session expired or cookie cleared — clean up
           await Auth.clearUserInfo();
@@ -85,10 +100,16 @@ export function useAuth(options?: UseAuthOptions) {
 
       const cachedUser = await Auth.getUserInfo();
       if (cachedUser) {
-        setUser(cachedUser);
-        setAuthState("authenticated");
-        identify(String(cachedUser.id), { name: cachedUser.name, email: cachedUser.email });
-        track("login", { method: "session" });
+        try {
+          const normalized = Auth.userFromApiJson(cachedUser as unknown as Record<string, unknown>);
+          setUser(normalized);
+          setAuthState("authenticated");
+          identify(String(normalized.id), { name: normalized.name, email: normalized.email });
+          track("login", { method: "session" });
+        } catch {
+          setUser(null);
+          setAuthState("unauthenticated");
+        }
       } else {
         setUser(null);
         setAuthState("unauthenticated");
@@ -118,6 +139,9 @@ export function useAuth(options?: UseAuthOptions) {
       resetAnalytics();
       await Auth.removeSessionToken();
       await Auth.clearUserInfo();
+      await clearPostLoginRedirect();
+      await clearPendingShareReferrer();
+      await clearPendingContractorInviteReferrer();
       setUser(null);
       setError(null);
       setAuthState("unauthenticated");
@@ -135,6 +159,9 @@ export function useAuth(options?: UseAuthOptions) {
         name: DEMO_USER.name,
         email: DEMO_USER.email,
         loginMethod: DEMO_USER.loginMethod,
+        role: DEMO_USER.role,
+        isVerified: false,
+        verifiedAt: null,
         lastSignedIn: new Date(DEMO_USER.lastSignedIn),
       };
       setUser(demoUser);
@@ -152,8 +179,12 @@ export function useAuth(options?: UseAuthOptions) {
     } else {
       Auth.getUserInfo().then((cachedUser) => {
         if (cachedUser) {
-          setUser(cachedUser);
-          setAuthState("authenticated");
+          try {
+            setUser(Auth.userFromApiJson(cachedUser as unknown as Record<string, unknown>));
+            setAuthState("authenticated");
+          } catch {
+            void fetchUser();
+          }
         } else {
           fetchUser();
         }

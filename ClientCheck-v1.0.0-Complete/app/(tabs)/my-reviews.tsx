@@ -5,8 +5,9 @@ import { ScreenBackground } from "@/components/screen-background";
 import { StarRating } from "@/components/star-rating";
 import { useColors } from "@/hooks/use-colors";
 import { trpc } from "@/lib/trpc";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuthWithLoginRedirect } from "@/hooks/use-auth-with-login-redirect";
 import { parseFlags, getFlagLabel, isCriticalFlag } from "@/shared/review-flags";
+import { CustomerIdentityVerifiedBadge } from "@/components/customer-identity-verified-badge";
 
 type MyReview = {
   id: number;
@@ -22,12 +23,13 @@ type MyReview = {
   customerLastName: string | null;
   customerCity: string | null;
   customerState: string | null;
+  customerIdentityVerified?: boolean;
 };
 
 export default function MyReviewsScreen() {
   const colors = useColors();
   const router = useRouter();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, contentReady } = useAuthWithLoginRedirect();
 
   const { data: reviews, isLoading, refetch } = trpc.reviews.getMyReviews.useQuery(
     undefined,
@@ -63,9 +65,12 @@ export default function MyReviewsScreen() {
             </Text>
           </View>
           <View style={styles.cardInfo}>
-            <Text style={[styles.customerName, { color: colors.foreground }]}>
-              {item.customerFirstName} {item.customerLastName}
-            </Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <Text style={[styles.customerName, { color: colors.foreground }]}>
+                {item.customerFirstName} {item.customerLastName}
+              </Text>
+              {item.customerIdentityVerified ? <CustomerIdentityVerifiedBadge size="sm" /> : null}
+            </View>
             {!!(item.customerCity || item.customerState) && (
               <Text style={[styles.location, { color: colors.muted }]}>
                 📍 {[item.customerCity, item.customerState].filter(Boolean).join(", ")}
@@ -137,6 +142,16 @@ export default function MyReviewsScreen() {
       </Pressable>
     );
   };
+
+  if (!contentReady) {
+    return (
+      <ScreenBackground backgroundKey="auth">
+        <ScreenContainer edges={["top", "left", "right"]} containerClassName="bg-transparent" className="flex-1 items-center justify-center">
+          <ActivityIndicator size="large" color={colors.primary} />
+        </ScreenContainer>
+      </ScreenBackground>
+    );
+  }
 
   return (
     <ScreenBackground backgroundKey="myReviews">

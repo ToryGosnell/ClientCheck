@@ -10,14 +10,17 @@ import {
 import { ScreenContainer } from "@/components/screen-container";
 import { ScreenBackground } from "@/components/screen-background";
 import { useColors } from "@/hooks/use-colors";
+import { useAuthWithLoginRedirect } from "@/hooks/use-auth-with-login-redirect";
 import { cn } from "@/lib/utils";
 import { apiUrl } from "@/lib/api";
+import { CustomerIdentityVerifiedBadge } from "@/components/customer-identity-verified-badge";
 
 interface RiskCheckResult {
   customerId: number;
   firstName: string;
   lastName: string;
   phone: string;
+  identityVerified?: boolean;
   riskScore: number;
   riskLevel: "critical" | "high" | "medium" | "low";
   paymentReliabilityScore: number;
@@ -34,6 +37,7 @@ interface RiskCheckResult {
 
 export default function PreJobRiskCheckScreen() {
   const colors = useColors();
+  const { contentReady } = useAuthWithLoginRedirect();
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<RiskCheckResult | null>(null);
@@ -50,9 +54,8 @@ export default function PreJobRiskCheckScreen() {
     setResult(null);
 
     try {
-      // Search for customer by name or phone
       const searchResponse = await fetch(
-        apiUrl(`/customers/search?query=${encodeURIComponent(searchQuery)}`),
+        apiUrl(`/customers?search=${encodeURIComponent(searchQuery)}`),
         { credentials: "include" },
       );
 
@@ -60,7 +63,12 @@ export default function PreJobRiskCheckScreen() {
         throw new Error("Customer not found");
       }
 
-      const customers = await searchResponse.json();
+      const searchBody = await searchResponse.json();
+      const customers = Array.isArray(searchBody)
+        ? searchBody
+        : Array.isArray(searchBody?.results)
+          ? searchBody.results
+          : [];
 
       if (customers.length === 0) {
         setError("No customers found matching your search");
@@ -69,7 +77,13 @@ export default function PreJobRiskCheckScreen() {
       }
 
       // Get risk score for first result
-      const customer = customers[0];
+      const customer = customers[0] as {
+        id: number;
+        firstName: string;
+        lastName: string;
+        phone: string;
+        identityVerified?: boolean;
+      };
       const riskResponse = await fetch(apiUrl(`/risk-scores/${customer.id}`), { credentials: "include" });
 
       if (!riskResponse.ok) {
@@ -83,6 +97,7 @@ export default function PreJobRiskCheckScreen() {
         firstName: customer.firstName,
         lastName: customer.lastName,
         phone: customer.phone,
+        identityVerified: customer.identityVerified,
         riskScore: riskData.riskScore,
         riskLevel: riskData.riskLevel,
         paymentReliabilityScore: riskData.paymentReliabilityScore,
@@ -104,6 +119,16 @@ export default function PreJobRiskCheckScreen() {
       setLoading(false);
     }
   };
+
+  if (!contentReady) {
+    return (
+      <ScreenBackground backgroundKey="auth">
+        <ScreenContainer className="flex-1 items-center justify-center">
+          <ActivityIndicator size="large" color={colors.primary} />
+        </ScreenContainer>
+      </ScreenBackground>
+    );
+  }
 
   const getRiskColor = (level: string) => {
     switch (level) {
@@ -200,9 +225,12 @@ export default function PreJobRiskCheckScreen() {
                 className="rounded-lg p-4 border border-border"
                 style={{ backgroundColor: colors.surface }}
               >
-                <Text className="text-lg font-bold text-foreground">
-                  {result.firstName} {result.lastName}
-                </Text>
+                <View className="flex-row items-center gap-2 flex-wrap">
+                  <Text className="text-lg font-bold text-foreground">
+                    {result.firstName} {result.lastName}
+                  </Text>
+                  {result.identityVerified ? <CustomerIdentityVerifiedBadge size="sm" /> : null}
+                </View>
                 <Text className="text-sm text-muted">{result.phone}</Text>
               </View>
 

@@ -9,8 +9,37 @@ export type User = {
   email: string | null;
   loginMethod: string | null;
   role?: string;
+  /** Customer identity verification (Stripe Checkout + webhook). */
+  isVerified: boolean;
+  /** When verification completed; null if never verified. */
+  verifiedAt: Date | null;
   lastSignedIn: Date;
 };
+
+function parseDateTimeOrNull(value: unknown): Date | null {
+  if (value == null || value === "") return null;
+  const d = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Build `User` from `/api/auth/me` or OAuth payloads (coerces ISO datetime strings). */
+export function userFromApiJson(raw: Record<string, unknown>): User {
+  const id = Number(raw.id);
+  if (!Number.isFinite(id)) {
+    throw new Error("Invalid user payload: id");
+  }
+  return {
+    id,
+    openId: String(raw.openId ?? ""),
+    name: (raw.name as string | null) ?? null,
+    email: (raw.email as string | null) ?? null,
+    loginMethod: (raw.loginMethod as string | null) ?? null,
+    role: (raw.role as string | undefined) ?? "user",
+    isVerified: typeof raw.isVerified === "boolean" ? raw.isVerified : false,
+    verifiedAt: parseDateTimeOrNull(raw.verifiedAt),
+    lastSignedIn: parseDateTimeOrNull(raw.lastSignedIn) ?? new Date(),
+  };
+}
 
 export async function getSessionToken(): Promise<string | null> {
   try {

@@ -117,7 +117,14 @@ const config: ExpoConfig = {
     favicon: "./assets/images/favicon.png",
   },
   plugins: [
-    "@sentry/react-native",
+    [
+      "@sentry/react-native/expo",
+      {
+        url: "https://sentry.io/",
+        project: "client-check",
+        organization: "the-local-guys-plumbing-and-dr",
+      },
+    ],
     "expo-router",
     "expo-localization",
     [

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View, Platform, ActivityIndicator } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ScreenBackground } from "@/components/screen-background";
@@ -7,21 +7,37 @@ import { startOAuthLogin } from "@/constants/oauth";
 import { setSelectedAccountType } from "@/lib/account-type";
 import { LegalFooter } from "@/components/legal-footer";
 import { track } from "@/lib/analytics";
+import { setPostLoginRedirect } from "@/lib/post-login-redirect";
+import {
+  CONTRACTOR_PRO_ANNUAL_PRICE_DISPLAY,
+  CONTRACTOR_PRO_MONTHLY_PRICE_DISPLAY,
+  CUSTOMER_NO_SUBSCRIPTION_REQUIRED_LINE,
+} from "@/shared/billing-config";
 
 const FAQ = [
-  { q: "When do I get charged?", a: "Never during your first 12 months. After that, $120 renews your access for another year." },
-  { q: "Will I be reminded?", a: "Yes — 30, 14, 3, and 1 day before expiration." },
-  { q: "Do customers pay?", a: "No. Customer accounts are always free." },
+  {
+    q: "When do contractors get charged?",
+    a: `Free tier has limited searches. Contractor Pro is ${CONTRACTOR_PRO_MONTHLY_PRICE_DISPLAY}/month or ${CONTRACTOR_PRO_ANNUAL_PRICE_DISPLAY}/year for unlimited search, risk scores, red flags, and alerts.`,
+  },
+  { q: "Will I be reminded?", a: "Yes — before Pro renewals when applicable." },
+  { q: "Do customers need a subscription?", a: CUSTOMER_NO_SUBSCRIPTION_REQUIRED_LINE },
   { q: "Can I cancel?", a: "Yes, from account settings at any time." },
 ];
 
 export default function SelectAccountScreen() {
   const colors = useColors();
   const router = useRouter();
-  const { preset } = useLocalSearchParams<{ preset?: string }>();
-  const customerFirst = preset === "customer";
+  const { preset, redirect } = useLocalSearchParams<{ preset?: string; redirect?: string | string[] }>();
+  const customerIntent = preset === "customer";
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [oauthStarting, setOauthStarting] = useState(false);
+
+  useEffect(() => {
+    const r = Array.isArray(redirect) ? redirect[0] : redirect;
+    if (typeof r === "string" && r.trim().length > 0) {
+      void setPostLoginRedirect(r.trim());
+    }
+  }, [redirect]);
 
   const handleContractor = async () => {
     if (oauthStarting) return;
@@ -29,7 +45,8 @@ export default function SelectAccountScreen() {
     try {
       track("signup_started", { account_type: "contractor" });
       await setSelectedAccountType("contractor");
-      await startOAuthLogin();
+      const started = await startOAuthLogin({ accountType: "contractor" });
+      if (!started) setOauthStarting(false);
     } finally {
       if (Platform.OS !== "web") setOauthStarting(false);
     }
@@ -41,7 +58,22 @@ export default function SelectAccountScreen() {
     try {
       track("signup_started", { account_type: "customer" });
       await setSelectedAccountType("customer");
-      await startOAuthLogin();
+      const started = await startOAuthLogin({ accountType: "customer" });
+      if (!started) setOauthStarting(false);
+    } finally {
+      if (Platform.OS !== "web") setOauthStarting(false);
+    }
+  };
+
+  /** Same OAuth as contractors; post-login sends admins to `/admin`, others to the app. */
+  const handleAdminAccess = async () => {
+    if (oauthStarting) return;
+    setOauthStarting(true);
+    try {
+      await setPostLoginRedirect("/admin");
+      await setSelectedAccountType("contractor");
+      const started = await startOAuthLogin({ accountType: "contractor" });
+      if (!started) setOauthStarting(false);
     } finally {
       if (Platform.OS !== "web") setOauthStarting(false);
     }
@@ -55,7 +87,8 @@ export default function SelectAccountScreen() {
       <View style={s.customerTop}>
         <Text style={s.customerLabel}>Customer account</Text>
         <Text style={s.customerDesc}>
-          Free to sign up or log in — dispute reviews, manage your profile, and track resolutions with a fair process.
+          {CUSTOMER_NO_SUBSCRIPTION_REQUIRED_LINE} Pay-per-dispute when you file. Optional monitoring and identity badge
+          add-ons if you want them.
         </Text>
       </View>
       <Pressable
@@ -74,16 +107,18 @@ export default function SelectAccountScreen() {
 
   const contractorBlock = (
     <View key="contractor-flow">
-      {!customerFirst ? null : (
-        <Text style={s.sectionHeading}>For contractors</Text>
-      )}
+      <Text style={s.sectionHeading}>For contractors</Text>
       <View style={s.hero}>
         <View style={[s.freeBadge, { backgroundColor: colors.primary + "1A" }]}>
-          <Text style={[s.freeBadgeText, { color: colors.primary }]}>NO CREDIT CARD REQUIRED</Text>
+          <Text style={[s.freeBadgeText, { color: colors.primary }]}>START FREE</Text>
         </View>
-        <Text style={s.heroPrice}>12 months free</Text>
-        <Text style={s.heroHeadline}>Full access to contractor risk intelligence.{"\n"}No charge for a year.</Text>
-        <Text style={s.heroRenewal}>$120/year after your first 12 months</Text>
+        <Text style={s.heroPrice}>Free tier</Text>
+        <Text style={s.heroHeadline}>
+          Limited searches — then upgrade to Pro for unlimited search, risk scores, red flags, and alerts.
+        </Text>
+        <Text style={s.heroRenewal}>
+          Pro: {CONTRACTOR_PRO_MONTHLY_PRICE_DISPLAY}/mo or {CONTRACTOR_PRO_ANNUAL_PRICE_DISPLAY}/yr
+        </Text>
       </View>
 
       <Pressable
@@ -101,20 +136,20 @@ export default function SelectAccountScreen() {
         ) : (
           <>
             <Text style={s.mainCtaText}>Continue as contractor</Text>
-            <Text style={s.mainCtaSub}>New or returning — same secure sign-in · No payment today</Text>
+            <Text style={s.mainCtaSub}>New or returning — same secure sign-in · Free tier, no card</Text>
           </>
         )}
       </Pressable>
 
       <View style={[s.featuresCard, { borderColor: "rgba(255,255,255,0.08)" }]}>
-        <Text style={s.featuresTitle}>What contractors get</Text>
+        <Text style={s.featuresTitle}>Contractor Pro includes</Text>
         {[
-          "Search customer history before accepting jobs",
-          "Verified reports from real contractors",
-          "Risk scores, alerts, and tracking",
-          "Post reviews and flag issues",
-          "Dispute visibility and resolution tools",
-          "Renewal reminders — no surprise charges",
+          "Unlimited search",
+          "Risk scores",
+          "Red flags",
+          "Alerts",
+          "Verified reports from contractors",
+          "Post reviews and track activity",
         ].map((f, i) => (
           <View key={i} style={s.featureRow}>
             <Text style={[s.featureCheck, { color: colors.primary }]}>✓</Text>
@@ -124,10 +159,15 @@ export default function SelectAccountScreen() {
       </View>
 
       <View style={s.trustLine}>
-        <Text style={s.trustText}>🔒 Secure · No card upfront · Cancel anytime · Stripe payments</Text>
+        <Text style={s.trustText}>🔒 Secure · Free tier · Pro upgrades in app · Stripe for paid plans</Text>
       </View>
 
-      {customerFirst ? null : customerBlock}
+      <Pressable
+        onPress={() => router.push("/contractor-paywall" as never)}
+        style={({ pressed }) => [s.proLink, pressed && { opacity: 0.8 }]}
+      >
+        <Text style={[s.proLinkText, { color: colors.primary }]}>View contractor Pro pricing →</Text>
+      </Pressable>
     </View>
   );
 
@@ -138,14 +178,16 @@ export default function SelectAccountScreen() {
           <Text style={s.backText}>← Back</Text>
         </Pressable>
 
-        {customerFirst ? (
-          <>
-            {customerBlock}
-            {contractorBlock}
-          </>
-        ) : (
-          contractorBlock
-        )}
+        {customerIntent ? (
+          <Text style={[s.intentHint, { color: colors.primary }]}>
+            Customer sign-up: choose below after contractors.
+          </Text>
+        ) : null}
+
+        {contractorBlock}
+
+        <Text style={[s.sectionHeading, { marginTop: 28 }]}>For customers</Text>
+        {customerBlock}
 
         {/* ── FAQ — tight ────────────────────────────────────────────── */}
         <View style={s.faqSection}>
@@ -164,6 +206,16 @@ export default function SelectAccountScreen() {
             </Pressable>
           ))}
         </View>
+
+        <Pressable
+          onPress={handleAdminAccess}
+          disabled={oauthStarting}
+          style={({ pressed }) => [s.adminAccessWrap, (pressed || oauthStarting) && { opacity: 0.55 }]}
+          accessibilityRole="link"
+          accessibilityLabel="Admin Access"
+        >
+          <Text style={s.adminAccessText}>Admin Access</Text>
+        </Pressable>
 
         <LegalFooter style={{ marginTop: 4 }} />
       </ScrollView>
@@ -200,8 +252,13 @@ const s = StyleSheet.create({
   featureCheck: { fontSize: 14, fontWeight: "700", marginTop: 2 },
   featureText: { color: "rgba(255,255,255,0.6)", fontSize: 13, lineHeight: 19, flex: 1 },
 
-  trustLine: { alignItems: "center", marginBottom: 24 },
+  trustLine: { alignItems: "center", marginBottom: 12 },
   trustText: { color: "rgba(255,255,255,0.3)", fontSize: 12, textAlign: "center", lineHeight: 18 },
+
+  proLink: { alignItems: "center", marginBottom: 20 },
+  proLinkText: { fontSize: 14, fontWeight: "700" },
+
+  intentHint: { fontSize: 13, fontWeight: "600", textAlign: "center", marginBottom: 16 },
 
   customerSection: {
     borderWidth: 1,
@@ -234,4 +291,7 @@ const s = StyleSheet.create({
   faqQ: { color: "#fff", fontSize: 13, fontWeight: "600", flex: 1, paddingRight: 10 },
   faqToggle: { color: "rgba(255,255,255,0.3)", fontSize: 18, fontWeight: "300" },
   faqA: { color: "rgba(255,255,255,0.45)", fontSize: 12, lineHeight: 18, marginTop: 8 },
+
+  adminAccessWrap: { alignSelf: "center", marginTop: 20, marginBottom: 4, paddingVertical: 10, paddingHorizontal: 12 },
+  adminAccessText: { fontSize: 12, fontWeight: "600", color: "rgba(255,255,255,0.34)", letterSpacing: 0.2 },
 });

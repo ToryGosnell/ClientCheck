@@ -1,4 +1,4 @@
-import { Tabs, useRouter } from "expo-router";
+import { Tabs, useRootNavigationState, useRouter, useSegments } from "expo-router";
 import { useEffect } from "react";
 import { Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -7,6 +7,16 @@ import { IconSymbol } from "@/components/ui/icon-symbol";
 import { useColors } from "@/hooks/use-colors";
 import { useAuth } from "@/hooks/use-auth";
 import { trpc } from "@/lib/trpc";
+import { DEMO_MODE } from "@/lib/demo-data";
+
+/** Tab segments that require sign-in (search, reviews, profile, and related). */
+const AUTH_REQUIRED_TAB_SEGMENTS = new Set([
+  "advanced-search",
+  "search",
+  "my-reviews",
+  "profile",
+  "pre-job-risk-check",
+]);
 
 export default function TabLayout() {
   const colors = useColors();
@@ -14,7 +24,22 @@ export default function TabLayout() {
   const bottomPadding = Platform.OS === "web" ? 12 : Math.max(insets.bottom, 8);
   const tabBarHeight = 56 + bottomPadding;
   const router = useRouter();
-  const { user } = useAuth();
+  const segments = useSegments();
+  const navState = useRootNavigationState();
+  const { user, loading, isAuthenticated } = useAuth();
+
+  const showMemberTabs = loading || isAuthenticated;
+
+  useEffect(() => {
+    if (DEMO_MODE) return;
+    if (!navState?.key) return;
+    if (loading) return;
+    if (isAuthenticated) return;
+    const leaf = segments[segments.length - 1];
+    if (typeof leaf === "string" && AUTH_REQUIRED_TAB_SEGMENTS.has(leaf)) {
+      router.replace("/select-account" as never);
+    }
+  }, [navState?.key, loading, isAuthenticated, segments, router]);
 
   const legalQuery = trpc.legal.getAcceptanceStatus.useQuery(undefined, {
     enabled: !!user,
@@ -54,6 +79,7 @@ export default function TabLayout() {
         options={{
           title: "Search",
           tabBarIcon: ({ color }) => <IconSymbol size={26} name="magnifyingglass" color={color} />,
+          href: showMemberTabs ? undefined : null,
         }}
       />
       <Tabs.Screen
@@ -61,6 +87,7 @@ export default function TabLayout() {
         options={{
           title: "My Reviews",
           tabBarIcon: ({ color }) => <IconSymbol size={26} name="doc.text.fill" color={color} />,
+          href: showMemberTabs ? undefined : null,
         }}
       />
       <Tabs.Screen
@@ -82,6 +109,7 @@ export default function TabLayout() {
         options={{
           title: "Profile",
           tabBarIcon: ({ color }) => <IconSymbol size={26} name="person.fill" color={color} />,
+          href: showMemberTabs ? undefined : null,
         }}
       />
       {/* Hidden tab routes — accessible by navigation but not shown in tab bar */}

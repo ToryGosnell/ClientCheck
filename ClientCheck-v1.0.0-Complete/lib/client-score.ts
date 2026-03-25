@@ -33,7 +33,9 @@ export function calculateClientScore(ratings: ClientScoreInput): ClientScoreResu
   const categories: ReviewCategoryRatings =
     ratings.categories ?? legacyToCategories(ratings as Record<string, unknown>);
 
-  const score = Math.max(0, Math.min(100, computeClientScore100(categories)));
+  const raw100 = computeClientScore100(categories);
+  const score =
+    raw100 == null ? 0 : Math.max(0, Math.min(100, raw100));
 
   const breakdown: Record<string, number> = {};
   for (const [key, val] of Object.entries(categories)) {

@@ -22,6 +22,8 @@ export interface WatchedCustomer {
   city?: string;
   state?: string;
   addedAt: number;
+  /** Present when tracked from search/profile with enriched API data */
+  identityVerified?: boolean;
 }
 
 /** Latest metrics used to diff and create in-app alerts for saved customers */

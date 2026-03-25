@@ -1,3 +1,9 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer components {
+  .verify-btn {
+    @apply mt-3 w-full cursor-pointer rounded-lg border-0 bg-primary px-4 py-3 text-center text-base font-bold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+}

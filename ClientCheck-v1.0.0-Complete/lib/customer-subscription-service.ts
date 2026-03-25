@@ -45,9 +45,12 @@ export class CustomerSubscriptionService {
     return Math.max(0, daysLeft);
   }
 
-  static shouldShowPaymentPrompt(subscription: CustomerSubscription | null): boolean {
-    if (!subscription) return true;
-    return !this.isSubscriptionActive(subscription);
+  /**
+   * Customer core access is free; do not use this to gate profile, responses, or disputes.
+   * Optional paid add-ons (e.g. identity badge) are surfaced only from explicit billing UI.
+   */
+  static shouldShowPaymentPrompt(_subscription: CustomerSubscription | null): boolean {
+    return false;
   }
 
   static getSubscriptionPrice(plan: "monthly" | "yearly"): number {

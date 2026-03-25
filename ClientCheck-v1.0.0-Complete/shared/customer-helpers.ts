@@ -110,16 +110,24 @@ export function computeCustomerAggregates(
     };
   }
 
-  const overallSum = allReviews.reduce((s, r) => s + (r.overallRating || 0), 0);
-  const overallAvg = overallSum / allReviews.length;
+  const overallValues = allReviews
+    .map((r) => r.overallRating)
+    .filter((v): v is number => typeof v === "number" && !Number.isNaN(v));
+  const overallAvg =
+    overallValues.length > 0 ? overallValues.reduce((s, v) => s + v, 0) / overallValues.length : 0;
 
   let calcSum = 0;
   let calcCount = 0;
   for (const r of allReviews) {
-    const raw = r.calculatedOverallRating
-      ? parseFloat(r.calculatedOverallRating)
-      : r.overallRating;
-    if (raw != null && !isNaN(raw)) {
+    let raw: number | null = null;
+    if (r.calculatedOverallRating != null && String(r.calculatedOverallRating).trim() !== "") {
+      const p = parseFloat(String(r.calculatedOverallRating));
+      if (!Number.isNaN(p)) raw = p;
+    }
+    if (raw == null && typeof r.overallRating === "number" && !Number.isNaN(r.overallRating)) {
+      raw = r.overallRating;
+    }
+    if (raw != null) {
       calcSum += raw;
       calcCount++;
     }

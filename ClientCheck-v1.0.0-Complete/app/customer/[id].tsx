@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
 
 import { ScreenContainer } from "@/components/screen-container";
@@ -13,7 +13,7 @@ import { ScoreBreakdownCard } from "@/components/score-breakdown";
 import { DecisionPanel } from "@/components/decision-panel";
 import { PaywallOverlay } from "@/components/paywall-overlay";
 import { useColors } from "@/hooks/use-colors";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuthWithLoginRedirect } from "@/hooks/use-auth-with-login-redirect";
 import { trpc } from "@/lib/trpc";
 import { computeRiskScore } from "@/lib/risk-score";
 import { track } from "@/lib/analytics";
@@ -22,8 +22,11 @@ import { hydrateUserDataFromDevice, isWatching, toggleWatch, type WatchedCustome
 import type { RiskLevel, ReviewWithContractor } from "@/shared/types";
 import { REVIEW_CATEGORIES } from "@/shared/review-categories";
 import { parseFlags } from "@/shared/review-flags";
+import { normalizeEmail } from "@/shared/customer-helpers";
+import { isContractor } from "@/shared/roles";
 import type { PrimaryStatementTone, ScoreTrend } from "@/shared/customer-score";
 import { getRecentActivityWarning, type RecentActivityWarning } from "@/shared/recent-activity-warning";
+import { CustomerNameWithVerifiedBadge } from "@/components/customer-identity-verified-badge";
 
 const TREND_HERO: Record<
   ScoreTrend,
@@ -155,7 +158,7 @@ export default function CustomerProfileScreen() {
   const fromRaw = firstParam(params.from);
   const router = useRouter();
   const colors = useColors();
-  const { isAuthenticated } = useAuth();
+  const { user, isAuthenticated, contentReady } = useAuthWithLoginRedirect();
   const customerId = parseInt(idRaw ?? "0", 10);
 
   const {
@@ -164,12 +167,12 @@ export default function CustomerProfileScreen() {
     isError: customerLoadError,
     error: customerLoadErr,
     refetch: refetchCustomer,
-  } = trpc.customers.getById.useQuery({ id: customerId }, { enabled: !!customerId });
+  } = trpc.customers.getById.useQuery({ id: customerId }, { enabled: contentReady && !!customerId });
   const {
     data: reviewsData,
     isLoading: loadingReviews,
     refetch: refetchReviews,
-  } = trpc.reviews.getForCustomer.useQuery({ customerId }, { enabled: !!customerId });
+  } = trpc.reviews.getForCustomer.useQuery({ customerId }, { enabled: contentReady && !!customerId });
   const reviews = useMemo(() => reviewsData?.reviews ?? [], [reviewsData?.reviews]);
   const aggregatedRatings = reviewsData?.aggregatedRatings ?? {};
   const recentIssueSummaries = useMemo(
@@ -178,17 +181,19 @@ export default function CustomerProfileScreen() {
   );
   const { data: customerScore } = trpc.customers.getScore.useQuery(
     { customerId },
-    { enabled: !!customerId },
+    { enabled: contentReady && !!customerId },
   );
   const { data: customerDisputes } = trpc.disputes.getDisputesByCustomer.useQuery(
     { customerId },
-    { enabled: !!customerId && isAuthenticated },
+    { enabled: contentReady && !!customerId && isAuthenticated },
   );
   const disputeReviewIds = useMemo(
     () => new Set((customerDisputes ?? []).map((d: { reviewId: number }) => d.reviewId)),
     [customerDisputes],
   );
   const markHelpful = trpc.reviews.markHelpful.useMutation({ onSuccess: () => refetchReviews() });
+  const recordContractorProfileView = trpc.customers.recordContractorProfileView.useMutation();
+  const profileViewRecordedRef = useRef(false);
   const [sortBy, setSortBy] = useState<"recent" | "rating" | "helpful">("recent");
   const [groupByLocation, setGroupByLocation] = useState(true);
   const [watching, setWatching] = useState(() => isWatching(customerId));
@@ -199,6 +204,21 @@ export default function CustomerProfileScreen() {
       setWatching(isWatching(customerId));
     })();
   }, [customerId]);
+
+  useEffect(() => {
+    profileViewRecordedRef.current = false;
+  }, [customerId]);
+
+  useEffect(() => {
+    if (!customer || !contentReady || !user) return;
+    if (!isContractor(user)) return;
+    if (profileViewRecordedRef.current) return;
+    const viewerEm = normalizeEmail(user.email ?? null);
+    const custEm = normalizeEmail(customer.email ?? null);
+    if (viewerEm && custEm && viewerEm === custEm) return;
+    profileViewRecordedRef.current = true;
+    recordContractorProfileView.mutate({ customerId });
+  }, [customer, contentReady, user, customerId, recordContractorProfileView]);
 
   useEffect(() => {
     if (customer) {
@@ -243,6 +263,14 @@ export default function CustomerProfileScreen() {
     () => getRecentActivityWarning(reviews as any, customerDisputes ?? null, isAuthenticated),
     [reviews, customerDisputes, isAuthenticated],
   );
+
+  if (!contentReady) {
+    return (
+      <ScreenContainer className="flex-1 items-center justify-center">
+        <ActivityIndicator color={colors.primary} size="large" />
+      </ScreenContainer>
+    );
+  }
 
   if (loadingCustomer) {
     return (
@@ -326,6 +354,7 @@ export default function CustomerProfileScreen() {
       city: customer.city ?? undefined,
       state: customer.state ?? undefined,
       addedAt: Date.now(),
+      identityVerified: (customer as { identityVerified?: boolean }).identityVerified,
     } as WatchedCustomer);
     setWatching(result);
     track("watch_toggled", { customer_id: customer.id, watching: result });
@@ -409,9 +438,13 @@ export default function CustomerProfileScreen() {
             </View>
 
             {/* Name */}
-            <Text style={s.heroName}>
-              {customer.firstName} {customer.lastName}
-            </Text>
+            <CustomerNameWithVerifiedBadge
+              firstName={customer.firstName}
+              lastName={customer.lastName}
+              identityVerified={(customer as { identityVerified?: boolean }).identityVerified}
+              showPreferredByContractorsCopy
+              textStyle={s.heroName}
+            />
 
             {/* Location */}
             {!!(customer.city || customer.state) && (
@@ -528,12 +561,17 @@ export default function CustomerProfileScreen() {
                       params: {
                         customerId: String(customer.id),
                         customerName: `${customer.firstName} ${customer.lastName}`,
+                        fromProfile: "1",
                       },
                     } as never)
                   }
-                  style={({ pressed }) => [s.retentionCtaBtn, pressed && { opacity: 0.85 }]}
+                  style={({ pressed }) => [
+                    s.retentionCtaBtnPrimary,
+                    { backgroundColor: colors.primary, borderColor: colors.primary + "aa" },
+                    pressed && { opacity: 0.85 },
+                  ]}
                 >
-                  <Text style={s.retentionCtaBtnText}>Submit a review</Text>
+                  <Text style={s.retentionCtaBtnTextPrimary}>Leave Review</Text>
                 </Pressable>
                 <Pressable onPress={handleShare} style={({ pressed }) => [s.retentionCtaBtn, pressed && { opacity: 0.85 }]}>
                   <Text style={s.retentionCtaBtnText}>Share with team</Text>
@@ -633,7 +671,12 @@ export default function CustomerProfileScreen() {
                 const cat = (aggregatedRatings as any).categories?.[key];
                 if (!cat || cat.notApplicable || cat.score == null) return null;
                 return (
-                  <CategoryRating key={key} label={label} description={description} rating={cat.score} />
+                  <CategoryRating
+                    key={key}
+                    label={label}
+                    description={description}
+                    value={cat.score as 1 | 2 | 3 | 4 | 5}
+                  />
                 );
               })}
             </View>
@@ -804,9 +847,9 @@ export default function CustomerProfileScreen() {
           ) : (
             <View style={s.emptyReviews}>
               <Text style={{ fontSize: 32 }}>📝</Text>
-              <Text style={[s.emptyTitle, { color: colors.foreground }]}>No Reviews Yet</Text>
+              <Text style={[s.emptyTitle, { color: colors.foreground }]}>No reviews yet</Text>
               <Text style={[s.emptyDesc, { color: colors.muted }]}>
-                Be the first contractor to review this customer.
+                Be the first contractor to leave feedback.
               </Text>
             </View>
           )}
@@ -819,10 +862,11 @@ export default function CustomerProfileScreen() {
               router.push({
                 pathname: "/add-review",
                 params: {
-                  customerId: customer.id,
+                  customerId: String(customer.id),
                   customerName: `${customer.firstName} ${customer.lastName}`,
+                  fromProfile: "1",
                 },
-              })
+              } as never)
             }
             style={({ pressed }) => [
               s.ctaBtn,
@@ -830,7 +874,7 @@ export default function CustomerProfileScreen() {
               pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
             ]}
           >
-            <Text style={s.ctaBtnText}>+ Add Your Review</Text>
+            <Text style={s.ctaBtnText}>Leave Review</Text>
           </Pressable>
         </View>
 
@@ -1042,6 +1086,17 @@ const s = StyleSheet.create({
     color: "rgba(255,255,255,0.92)",
     fontSize: 12,
     fontWeight: "700",
+  },
+  retentionCtaBtnPrimary: {
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  retentionCtaBtnTextPrimary: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "800",
   },
   trackHookLine: {
     marginTop: 12,

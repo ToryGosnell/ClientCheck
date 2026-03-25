@@ -1,10 +1,12 @@
-import { and, desc, eq, inArray, like, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, like, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql, { type RowDataPacket } from "mysql2/promise";
 import type { Pool as MysqlCallbackPool } from "mysql2";
 import {
   contractorProfiles,
+  customerProfileViews,
   customerResponses,
+  customerRiskScores,
   customers,
   reviewHelpfulVotes,
   reviewDisputes,
@@ -16,8 +18,11 @@ import {
   type InsertCustomer,
   type InsertReview,
   type InsertUser,
+  type User,
 } from "../drizzle/schema";
+import { sortCustomersBySearchRanking } from "../shared/customer-search-ranking";
 import { ENV } from "./_core/env";
+import { normalizeEmail } from "../shared/customer-helpers";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -32,6 +37,53 @@ export async function getDb() {
     }
   }
   return _db;
+}
+
+type AppDatabase = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+
+export async function loadVerifiedCustomerEmailsSet(database: AppDatabase): Promise<Set<string>> {
+  const rows = await database
+    .select({ email: users.email })
+    .from(users)
+    .where(and(eq(users.role, "customer"), eq(users.isVerified, true)));
+  const set = new Set<string>();
+  for (const r of rows) {
+    const n = normalizeEmail(r.email);
+    if (n) set.add(n);
+  }
+  return set;
+}
+
+export function customerEmailIsIdentityVerified(
+  customerEmail: string | null | undefined,
+  verifiedEmails: Set<string>,
+): boolean {
+  const n = normalizeEmail(customerEmail);
+  return n != null && verifiedEmails.has(n);
+}
+
+export async function enrichCustomersWithIdentityVerified<T extends { email?: string | null }>(
+  database: AppDatabase,
+  rows: T[],
+): Promise<Array<T & { identityVerified: boolean }>> {
+  if (rows.length === 0) return [];
+  const verifiedEmails = await loadVerifiedCustomerEmailsSet(database);
+  return rows.map((r) => ({
+    ...r,
+    identityVerified: customerEmailIsIdentityVerified(r.email ?? null, verifiedEmails),
+  }));
+}
+
+export async function enrichReviewRowsWithCustomerIdentityVerified<T extends { customerEmail?: string | null }>(
+  database: AppDatabase,
+  rows: T[],
+): Promise<Array<T & { customerIdentityVerified: boolean }>> {
+  if (rows.length === 0) return [];
+  const verifiedEmails = await loadVerifiedCustomerEmailsSet(database);
+  return rows.map((r) => ({
+    ...r,
+    customerIdentityVerified: customerEmailIsIdentityVerified(r.customerEmail ?? null, verifiedEmails),
+  }));
 }
 
 /**
@@ -119,6 +171,94 @@ export async function getUserByOpenId(openId: string) {
   const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
 
   return result.length > 0 ? result[0] : undefined;
+}
+
+/**
+ * Records a one-time "shared customer profile" referral on the signed-in user (`userId`).
+ * Does not overwrite an existing `referredByUserId`.
+ */
+export async function recordShareReferralOnce(params: {
+  userId: number;
+  referrerUserId: number;
+}): Promise<{ ok: boolean; reason?: string }> {
+  const userId = Math.floor(Number(params.userId));
+  const referrerUserId = Math.floor(Number(params.referrerUserId));
+  if (!Number.isFinite(userId) || userId < 1 || !Number.isFinite(referrerUserId) || referrerUserId < 1) {
+    return { ok: false, reason: "invalid" };
+  }
+  if (userId === referrerUserId) {
+    return { ok: false, reason: "self" };
+  }
+
+  const dbConn = await getDb();
+  if (!dbConn) {
+    return { ok: false, reason: "no_db" };
+  }
+
+  const refRow = await dbConn.select({ id: users.id }).from(users).where(eq(users.id, referrerUserId)).limit(1);
+  if (refRow.length === 0) {
+    return { ok: false, reason: "referrer_not_found" };
+  }
+
+  const me = await dbConn
+    .select({ referredByUserId: users.referredByUserId })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  if (me.length === 0) {
+    return { ok: false, reason: "user_not_found" };
+  }
+  if (me[0].referredByUserId != null) {
+    return { ok: false, reason: "already_set" };
+  }
+
+  await dbConn.update(users).set({ referredByUserId: referrerUserId }).where(eq(users.id, userId));
+  return { ok: true };
+}
+
+/** Active users may authenticate; soft-deleted / suspended may not. */
+export function isUserAccountActive(user: Pick<Partial<User>, "accountStatus" | "deletedAt">): boolean {
+  if (user.deletedAt != null) return false;
+  const status = user.accountStatus ?? "active";
+  return status === "active";
+}
+
+/**
+ * Soft-delete a contractor user: keeps the `users` row (and foreign keys) so customers and reviews stay intact.
+ * Clears PII on the user and contractor profile; sets subscription cancelled separately (caller).
+ */
+export async function softDeleteContractorUser(userId: number): Promise<void> {
+  const dbConn = await getDb();
+  if (!dbConn) throw new Error("Database not available");
+  const now = new Date();
+  await dbConn.transaction(async (tx) => {
+    await tx
+      .update(users)
+      .set({
+        accountStatus: "deleted",
+        deletedAt: now,
+        name: "Former contractor",
+        email: null,
+        updatedAt: now,
+      })
+      .where(eq(users.id, userId));
+    await tx
+      .update(contractorProfiles)
+      .set({
+        trade: null,
+        licenseNumber: null,
+        company: null,
+        city: null,
+        state: null,
+        bio: null,
+        idDocumentUrl: null,
+        licenseDocumentUrl: null,
+        insuranceDocumentUrl: null,
+        verificationNotes: null,
+        updatedAt: now,
+      })
+      .where(eq(contractorProfiles.userId, userId));
+  });
 }
 
 // ─── Contractor Profiles ──────────────────────────────────────────────────────
@@ -212,6 +352,7 @@ const CUSTOMERS_SELECT_COLUMNS: (keyof Customer)[] = [
   "ratingPermitPulling",
   "ratingOverallJobExperience",
   "riskLevel",
+  "contractorProfileViewCount",
   "createdByUserId",
   "createdAt",
   "updatedAt",
@@ -359,7 +500,11 @@ function rowToCustomer(row: RowDataPacket): Customer {
     ratingPermitPulling: dec("ratingPermitPulling", "0.00"),
     ratingOverallJobExperience: dec("ratingOverallJobExperience", "0.00"),
     riskLevel: (str("riskLevel", "unknown") as Customer["riskLevel"]) || "unknown",
-    createdByUserId: num("createdByUserId", 0),
+    contractorProfileViewCount: num("contractorProfileViewCount", 0),
+    createdByUserId:
+      g("createdByUserId") != null && g("createdByUserId") !== ""
+        ? num("createdByUserId", 0)
+        : null,
     createdAt: dt("createdAt"),
     updatedAt: dt("updatedAt"),
   };
@@ -572,7 +717,9 @@ export async function searchCustomers(query: string, limit = 15, state?: string,
     });
   }
 
-  return results;
+  if (results.length === 0) return results;
+  const enriched = await enrichCustomersWithIdentityVerified(db, results);
+  return sortCustomersBySearchRanking(enriched);
 }
 
 /**
@@ -688,16 +835,170 @@ export async function searchCustomersApi(query: string, limit = 500) {
     });
     throw err;
   }
-  return rows
+  const mapped = rows
     .filter((row): row is RowDataPacket => row != null && typeof row === "object" && !Array.isArray(row))
     .map((row) => rowToCustomer(alignCustomerRow(row, selectPairs)));
+  const drizzleDb = await getDb();
+  if (!drizzleDb || mapped.length === 0) return mapped;
+  const enriched = await enrichCustomersWithIdentityVerified(drizzleDb, mapped);
+  return sortCustomersBySearchRanking(enriched);
+}
+
+export type DirectoryCustomerInsights = {
+  matched: boolean;
+  customerId: number | null;
+  directoryReviewCount: number;
+  contractorProfileViewCount: number;
+  criticalRedFlagCount: number;
+  directoryRiskLevel: Customer["riskLevel"];
+  engineRiskScore: number | null;
+  engineRiskLevel: "critical" | "high" | "medium" | "low" | null;
+};
+
+const EMPTY_DIRECTORY_INSIGHTS: DirectoryCustomerInsights = {
+  matched: false,
+  customerId: null,
+  directoryReviewCount: 0,
+  contractorProfileViewCount: 0,
+  criticalRedFlagCount: 0,
+  directoryRiskLevel: "unknown",
+  engineRiskScore: null,
+  engineRiskLevel: null,
+};
+
+/**
+ * Match logged-in customer user to a directory row by email (normalized + raw trim).
+ * Used for verification paywall triggers and profile-view counts.
+ */
+export async function getDirectoryCustomerInsightsForUser(userId: number): Promise<DirectoryCustomerInsights> {
+  const database = await getDb();
+  if (!database) return EMPTY_DIRECTORY_INSIGHTS;
+
+  const [urow] = await database.select({ email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
+  const em = normalizeEmail(urow?.email ?? null);
+  if (!em) return EMPTY_DIRECTORY_INSIGHTS;
+
+  const [crow] = await database
+    .select()
+    .from(customers)
+    .where(
+      and(
+        eq(customers.isDuplicate, false),
+        or(eq(customers.normalizedEmail, em), sql`LOWER(TRIM(COALESCE(${customers.email},''))) = ${em}`),
+      ),
+    )
+    .limit(1);
+
+  if (!crow) return EMPTY_DIRECTORY_INSIGHTS;
+
+  const [riskRow] = await database
+    .select()
+    .from(customerRiskScores)
+    .where(eq(customerRiskScores.customerId, crow.id))
+    .limit(1);
+
+  return {
+    matched: true,
+    customerId: crow.id,
+    directoryReviewCount: crow.reviewCount,
+    contractorProfileViewCount: crow.contractorProfileViewCount ?? 0,
+    criticalRedFlagCount: crow.criticalRedFlagCount,
+    directoryRiskLevel: crow.riskLevel,
+    engineRiskScore: riskRow?.riskScore ?? null,
+    engineRiskLevel: riskRow?.riskLevel ?? null,
+  };
+}
+
+/** Short-lived cache for weekly view stats (reduces repeated reads when share modal opens). */
+const weeklyCustomerViewStatsCache = new Map<string, { at: number; value: number }>();
+const WEEKLY_VIEW_STATS_TTL_MS = 60_000;
+
+/**
+ * Count of distinct contractors who viewed this customer's profile in the last 7 days.
+ */
+export async function getWeeklyDistinctCustomerProfileViews(customerId: number): Promise<number> {
+  const id = Math.floor(Number(customerId));
+  if (!Number.isFinite(id) || id < 1) return 0;
+
+  const cacheKey = String(id);
+  const now = Date.now();
+  const cached = weeklyCustomerViewStatsCache.get(cacheKey);
+  if (cached && now - cached.at < WEEKLY_VIEW_STATS_TTL_MS) {
+    return cached.value;
+  }
+
+  const database = await getDb();
+  if (!database) return 0;
+
+  const oneWeekAgo = new Date();
+  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+
+  const [row] = await database
+    .select({
+      weeklyViews: sql<number>`count(distinct ${customerProfileViews.userId})`.mapWith(Number),
+    })
+    .from(customerProfileViews)
+    .where(and(eq(customerProfileViews.customerId, id), gte(customerProfileViews.viewedAt, oneWeekAgo)));
+
+  const value = Number.isFinite(row?.weeklyViews) ? Math.max(0, Math.floor(row!.weeklyViews)) : 0;
+  weeklyCustomerViewStatsCache.set(cacheKey, { at: now, value });
+  return value;
+}
+
+/** Increment when an authenticated contractor opens a directory customer profile. Returns new count or null if missing DB/customer. */
+export async function incrementCustomerContractorProfileViews(
+  customerId: number,
+  contractorUserId: number,
+): Promise<number | null> {
+  const database = await getDb();
+  if (!database) return null;
+  const uid = Math.floor(Number(contractorUserId));
+  if (!Number.isFinite(uid) || uid < 1) return null;
+
+  try {
+    const [exists] = await database
+      .select({ id: customers.id })
+      .from(customers)
+      .where(eq(customers.id, customerId))
+      .limit(1);
+    if (!exists) return null;
+
+    try {
+      await database.insert(customerProfileViews).values({
+        customerId,
+        userId: uid,
+        viewedAt: new Date(),
+      });
+      weeklyCustomerViewStatsCache.delete(String(customerId));
+    } catch (insertErr) {
+      console.warn("[incrementCustomerContractorProfileViews] profile view row insert failed:", insertErr);
+    }
+
+    await database
+      .update(customers)
+      .set({ contractorProfileViewCount: sql`${customers.contractorProfileViewCount} + 1` })
+      .where(eq(customers.id, customerId));
+
+    const [row] = await database
+      .select({ contractorProfileViewCount: customers.contractorProfileViewCount })
+      .from(customers)
+      .where(eq(customers.id, customerId))
+      .limit(1);
+    return row?.contractorProfileViewCount ?? null;
+  } catch (err) {
+    console.warn("[incrementCustomerContractorProfileViews]", err);
+    return null;
+  }
 }
 
 export async function getCustomerById(id: number) {
-  const db = await getDb();
-  if (!db) return null;
-  const rows = await db.select().from(customers).where(eq(customers.id, id)).limit(1);
-  return rows[0] ?? null;
+  const database = await getDb();
+  if (!database) return null;
+  const rows = await database.select().from(customers).where(eq(customers.id, id)).limit(1);
+  const c = rows[0] ?? null;
+  if (!c) return null;
+  const [enriched] = await enrichCustomersWithIdentityVerified(database, [c]);
+  return enriched;
 }
 
 export async function getCustomerByPhone(phone: string) {
@@ -716,6 +1017,9 @@ export async function getCustomerByPhone(phone: string) {
 export async function createCustomer(data: InsertCustomer) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  if (data.createdByUserId == null) {
+    throw new Error("createdByUserId is required when creating a customer");
+  }
   const { normalizeName, normalizePhone, normalizeEmail, normalizeAddress, buildCustomerSearchText } = await import("../shared/customer-helpers");
   const enriched = {
     ...data,
@@ -840,40 +1144,45 @@ export async function findPotentialCustomerMatches(input: {
     .limit(limit);
 
   // Rank: exact phone/email = 100, address = 80, name+location = 60, name-only = 40
-  return rows.map((c) => {
-    let matchScore = 0;
-    const cNorm = c.normalizedPhone;
-    if (nPhone && cNorm === nPhone) matchScore = Math.max(matchScore, 100);
-    if (nEmail && c.normalizedEmail === nEmail) matchScore = Math.max(matchScore, 100);
-    if (nAddr && c.normalizedAddressKey === nAddr) matchScore = Math.max(matchScore, 80);
-    if (nName && c.normalizedName === nName) {
-      const locMatch = c.city === (input.city || "") && c.state === (input.state || "");
-      matchScore = Math.max(matchScore, locMatch ? 60 : 40);
-    }
-    return { ...c, matchScore };
-  }).sort((a, b) => b.matchScore - a.matchScore);
+  const ranked = rows
+    .map((c) => {
+      let matchScore = 0;
+      const cNorm = c.normalizedPhone;
+      if (nPhone && cNorm === nPhone) matchScore = Math.max(matchScore, 100);
+      if (nEmail && c.normalizedEmail === nEmail) matchScore = Math.max(matchScore, 100);
+      if (nAddr && c.normalizedAddressKey === nAddr) matchScore = Math.max(matchScore, 80);
+      if (nName && c.normalizedName === nName) {
+        const locMatch = c.city === (input.city || "") && c.state === (input.state || "");
+        matchScore = Math.max(matchScore, locMatch ? 60 : 40);
+      }
+      return { ...c, matchScore };
+    })
+    .sort((a, b) => b.matchScore - a.matchScore);
+  return enrichCustomersWithIdentityVerified(db, ranked);
 }
 
 export async function getRecentlyFlaggedCustomers(limit = 10) {
-  const db = await getDb();
-  if (!db) return [];
-  return db
+  const database = await getDb();
+  if (!database) return [];
+  const rows = await database
     .select()
     .from(customers)
     .where(eq(customers.riskLevel, "high"))
     .orderBy(desc(customers.updatedAt))
     .limit(limit);
+  return enrichCustomersWithIdentityVerified(database, rows);
 }
 
 export async function getTopRatedCustomers(limit = 10) {
-  const db = await getDb();
-  if (!db) return [];
-  return db
+  const database = await getDb();
+  if (!database) return [];
+  const rows = await database
     .select()
     .from(customers)
     .where(eq(customers.riskLevel, "low"))
     .orderBy(desc(customers.overallRating))
     .limit(limit);
+  return enrichCustomersWithIdentityVerified(database, rows);
 }
 
 // ─── Reviews ──────────────────────────────────────────────────────────────────
@@ -912,6 +1221,7 @@ export async function getReviewById(reviewId: number) {
       customerLastName: customers.lastName,
       customerCity: customers.city,
       customerState: customers.state,
+      customerEmail: customers.email,
     })
     .from(reviews)
     .leftJoin(users, eq(reviews.contractorUserId, users.id))
@@ -919,7 +1229,12 @@ export async function getReviewById(reviewId: number) {
     .leftJoin(customers, eq(reviews.customerId, customers.id))
     .where(eq(reviews.id, reviewId))
     .limit(1);
-  return rows[0] ?? null;
+  const row = rows[0] ?? null;
+  if (!row) return null;
+  const database = await getDb();
+  if (!database) return { ...row, customerIdentityVerified: false };
+  const [enriched] = await enrichReviewRowsWithCustomerIdentityVerified(database, [row]);
+  return enriched;
 }
 
 export async function getReviewsForCustomer(customerId: number) {
@@ -969,7 +1284,7 @@ export async function getReviewsForCustomer(customerId: number) {
     .where(sql`${reviews.customerId} IN (${sql.raw(customerIds.join(","))})`)
     .orderBy(desc(reviews.createdAt));
 
-  const { legacyToCategories, aggregateCategoryRatings, legacyToWouldWorkAgain, deserializeNewCategories, getFinalOverallRating } = await import("../shared/review-categories");
+  const { legacyToCategories, aggregateCategoryRatings, legacyToWouldWorkAgain, deserializeNewCategories } = await import("../shared/review-categories");
   const { parseFlags: parseFlagsHelper } = await import("../shared/review-flags");
 
   const perReviewCategories = allReviews.map((r) => {
@@ -982,16 +1297,28 @@ export async function getReviewsForCustomer(customerId: number) {
   // overallRating in the DB already reflects the wouldWorkAgain override,
   // so the aggregate is a straight average of stored values.
   const aggregatedRatings = {
-    overallRating: allReviews.length > 0
-      ? allReviews.reduce((sum, r) => sum + (r.overallRating || 0), 0) / allReviews.length
-      : 0,
-    calculatedOverallRating: allReviews.length > 0
-      ? allReviews.reduce((sum, r) => {
-          const parsed = deserializeNewCategories(r.categoryDataJson);
-          const rawScore = parsed ? (parseFloat((parsed as any).calculatedOverallRating ?? "0") || null) : null;
-          return sum + (rawScore ?? r.overallRating ?? 0);
-        }, 0) / allReviews.length
-      : 0,
+    overallRating: (() => {
+      const vals = allReviews
+        .map((r) => r.overallRating)
+        .filter((v): v is number => typeof v === "number" && !Number.isNaN(v));
+      return vals.length > 0 ? vals.reduce((sum, v) => sum + v, 0) / vals.length : 0;
+    })(),
+    calculatedOverallRating: (() => {
+      const vals: number[] = [];
+      for (const r of allReviews) {
+        const parsed = deserializeNewCategories(r.categoryDataJson);
+        let n: number | null = null;
+        if (parsed != null && (parsed as { calculatedOverallRating?: unknown }).calculatedOverallRating != null) {
+          const p = parseFloat(String((parsed as { calculatedOverallRating?: unknown }).calculatedOverallRating));
+          if (!Number.isNaN(p)) n = p;
+        }
+        if (n == null && typeof r.overallRating === "number" && !Number.isNaN(r.overallRating)) {
+          n = r.overallRating;
+        }
+        if (n != null) vals.push(n);
+      }
+      return vals.length > 0 ? vals.reduce((sum, v) => sum + v, 0) / vals.length : 0;
+    })(),
     reviewCount: allReviews.length,
     categories: aggregatedCategories,
     wouldNotWorkAgainCount: allReviews.filter((r) => r.wouldWorkAgain === "no").length,
@@ -1020,8 +1347,12 @@ export async function getReviewsForCustomer(customerId: number) {
   };
 
   if (allReviews.length > 0) {
-    const legacyAvg = (field: string) =>
-      allReviews.reduce((s, r) => s + ((r as any)[field] || 0), 0) / allReviews.length;
+    const legacyAvg = (field: string) => {
+      const vals = allReviews
+        .map((r) => (r as Record<string, unknown>)[field])
+        .filter((v): v is number => typeof v === "number" && v >= 1 && v <= 5);
+      return vals.length > 0 ? vals.reduce((s, v) => s + v, 0) / vals.length : 0;
+    };
     aggregatedRatings.ratingPaymentReliability = legacyAvg("ratingPaymentReliability");
     aggregatedRatings.ratingCommunication = legacyAvg("ratingCommunication");
     aggregatedRatings.ratingScopeChanges = legacyAvg("ratingScopeChanges");
@@ -1053,7 +1384,7 @@ export async function getReviewsForCustomer(customerId: number) {
 export async function getReviewsByContractor(contractorUserId: number) {
   const db = await getDb();
   if (!db) return [];
-  return db
+  const list = await db
     .select({
       id: reviews.id,
       customerId: reviews.customerId,
@@ -1068,16 +1399,21 @@ export async function getReviewsByContractor(contractorUserId: number) {
       customerLastName: customers.lastName,
       customerCity: customers.city,
       customerState: customers.state,
+      customerEmail: customers.email,
     })
     .from(reviews)
     .leftJoin(customers, eq(reviews.customerId, customers.id))
     .where(eq(reviews.contractorUserId, contractorUserId))
     .orderBy(desc(reviews.createdAt));
+  return enrichReviewRowsWithCustomerIdentityVerified(db, list);
 }
 
 export async function createReview(data: InsertReview) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  if (data.contractorUserId == null) {
+    throw new Error("contractorUserId is required when creating a review");
+  }
   const result = await db.insert(reviews).values(data);
   const reviewId = result[0].insertId as number;
   await recalculateCustomerRatings(data.customerId);
@@ -1105,7 +1441,7 @@ export async function deleteReview(reviewId: number, contractorUserId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const review = await db.select().from(reviews).where(eq(reviews.id, reviewId)).limit(1);
-  if (!review[0] || review[0].contractorUserId !== contractorUserId) {
+  if (!review[0] || review[0].contractorUserId == null || review[0].contractorUserId !== contractorUserId) {
     throw new Error("Review not found or unauthorized");
   }
   await db
@@ -1142,9 +1478,9 @@ export async function markReviewHelpful(reviewId: number, userId: number) {
 }
 
 export async function getRecentReviews(limit = 20) {
-  const db = await getDb();
-  if (!db) return [];
-  return db
+  const database = await getDb();
+  if (!database) return [];
+  const list = await database
     .select({
       id: reviews.id,
       customerId: reviews.customerId,
@@ -1159,6 +1495,7 @@ export async function getRecentReviews(limit = 20) {
       customerCity: customers.city,
       customerState: customers.state,
       customerRiskLevel: customers.riskLevel,
+      customerEmail: customers.email,
       contractorName: users.name,
       contractorTrade: contractorProfiles.trade,
     })
@@ -1168,6 +1505,7 @@ export async function getRecentReviews(limit = 20) {
     .leftJoin(contractorProfiles, eq(reviews.contractorUserId, contractorProfiles.userId))
     .orderBy(desc(reviews.createdAt))
     .limit(limit);
+  return enrichReviewRowsWithCustomerIdentityVerified(database, list);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1196,11 +1534,13 @@ export async function recomputeCustomerAggregates(customerId: number) {
   const { computeCustomerAggregates } = await import("../shared/customer-helpers");
   const agg = computeCustomerAggregates(allReviews as any);
 
-  // Legacy flat averages
+  // Legacy flat averages (1–5 only; 0 = unset/N/A in newer reviews — exclude from mean)
   const avg = (field: string) => {
-    if (allReviews.length === 0) return "0.00";
-    const sum = allReviews.reduce((s, r) => s + ((r as any)[field] || 0), 0);
-    return (sum / allReviews.length).toFixed(2);
+    const vals = allReviews
+      .map((r) => (r as any)[field])
+      .filter((v) => typeof v === "number" && v >= 1 && v <= 5);
+    if (vals.length === 0) return "0.00";
+    return (vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(2);
   };
 
   await db

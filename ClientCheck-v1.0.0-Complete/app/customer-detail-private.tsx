@@ -7,6 +7,7 @@ import { useState, useEffect } from "react";
 import { apiUrl } from "@/lib/api";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
+import { CustomerNameWithVerifiedBadge } from "@/components/customer-identity-verified-badge";
 
 interface CustomerData {
   id: number;
@@ -22,6 +23,7 @@ interface CustomerData {
   reviewCount: number;
   riskLevel: string;
   createdByUserId: number;
+  identityVerified?: boolean;
 }
 
 export default function CustomerDetailPrivateScreen() {
@@ -137,9 +139,12 @@ export default function CustomerDetailPrivateScreen() {
             { backgroundColor: colors.surface, borderColor: colors.border },
           ]}
         >
-          <Text style={[styles.nameText, { color: colors.foreground }]}>
-            {customer.firstName} {customer.lastName}
-          </Text>
+          <CustomerNameWithVerifiedBadge
+            firstName={customer.firstName}
+            lastName={customer.lastName}
+            identityVerified={customer.identityVerified}
+            textStyle={[styles.nameText, { color: colors.foreground }]}
+          />
           <View
             style={[
               styles.riskBadge,

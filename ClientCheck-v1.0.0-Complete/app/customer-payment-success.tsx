@@ -5,7 +5,10 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { useColors } from "@/hooks/use-colors";
 import { trpc } from "@/lib/trpc";
 import * as Haptics from "expo-haptics";
-import { getPlanDisplayName, getPlanPrice } from "@/shared/billing-config";
+import {
+  CONTRACTOR_PRO_ANNUAL_PRICE_DISPLAY,
+  CUSTOMER_IDENTITY_VERIFICATION_PRICE_DISPLAY,
+} from "@/shared/billing-config";
 import { track } from "@/lib/analytics";
 
 export default function CustomerPaymentSuccessScreen() {
@@ -32,7 +35,10 @@ export default function CustomerPaymentSuccessScreen() {
     }
   }, [paymentVerified, params.plan]);
 
-  const planLabel = params.plan === "yearly" ? "Annual ($120.00/year)" : "Monthly ($9.99/month)";
+  const planLabel =
+    params.plan === "yearly"
+      ? `Annual (${CONTRACTOR_PRO_ANNUAL_PRICE_DISPLAY}/year)`
+      : `Identity verification badge (${CUSTOMER_IDENTITY_VERIFICATION_PRICE_DISPLAY}/month, optional add-on)`;
   const renewDate = subStatus?.daysRemaining
     ? new Date(Date.now() + (subStatus.daysRemaining ?? 30) * 86400000).toLocaleDateString("en-US", {
         month: "long",
@@ -57,7 +63,8 @@ export default function CustomerPaymentSuccessScreen() {
               <View style={{ gap: 8, alignItems: "center" }}>
                 <Text style={{ fontSize: 28, fontWeight: "800", color: colors.foreground }}>Welcome!</Text>
                 <Text style={{ fontSize: 15, color: colors.muted, textAlign: "center", lineHeight: 22 }}>
-                  Your subscription is now active. You're part of the fair review community.
+                  Your optional identity verification add-on is active. Your customer account stays free for profile,
+                  reviews, responses, and disputes.
                 </Text>
               </View>
             </>
@@ -78,12 +85,11 @@ export default function CustomerPaymentSuccessScreen() {
 
           {/* What's Included */}
           <View style={{ width: "100%", backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 16, gap: 12 }}>
-            <Text style={{ fontWeight: "700", color: colors.foreground }}>You Now Have Access To:</Text>
+            <Text style={{ fontWeight: "700", color: colors.foreground }}>Included with this add-on:</Text>
             {[
-              { icon: "👁️", text: "View all contractor reviews and ratings" },
-              { icon: "💬", text: "Respond to reviews about your business" },
-              { icon: "⚖️", text: "File disputes with evidence and photos" },
-              { icon: "📊", text: "Track your reputation score and trends" },
+              { icon: "✅", text: "Verified identity badge on your customer profile" },
+              { icon: "👤", text: "Same free tools as before: profile, reviews, responses, disputes" },
+              { icon: "💳", text: "Manage or cancel this add-on anytime from Billing" },
             ].map((item) => (
               <View key={item.icon} style={{ flexDirection: "row", gap: 12 }}>
                 <Text style={{ fontSize: 18 }}>{item.icon}</Text>

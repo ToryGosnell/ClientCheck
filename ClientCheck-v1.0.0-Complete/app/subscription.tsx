@@ -7,13 +7,19 @@ import { trpc } from "@/lib/trpc";
 import { CancelSubscriptionModal } from "@/components/cancel-subscription-modal";
 import { cancelSubscription } from "@/lib/cancel-subscription-service";
 import { useState } from "react";
-import { getMembershipDisplayState, getVerificationBadge } from "@/shared/membership";
+import {
+  getMembershipDisplayState,
+  getVerificationBadge,
+  getCustomerMembershipDisplayState,
+} from "@/shared/membership";
 import {
   getPlanDisplayName,
   CONTRACTOR_ANNUAL_PRICE_DISPLAY,
-  CUSTOMER_MONTHLY_PRICE_DISPLAY,
+  CONTRACTOR_PRO_MONTHLY_PRICE_DISPLAY,
+  CUSTOMER_IDENTITY_VERIFICATION_PRICE_DISPLAY,
   BILLING_COPY,
 } from "@/shared/billing-config";
+import { CustomerVerifyBadgeButton } from "@/components/customer-verify-badge-button";
 
 export default function SubscriptionScreen() {
   const colors = useColors();
@@ -31,10 +37,23 @@ export default function SubscriptionScreen() {
     { enabled: isAuthenticated },
   );
 
-  const membershipDisplay = membership ? getMembershipDisplayState(membership) : null;
-  const badge = membership ? getVerificationBadge(membership.verificationStatus) : null;
+  const isCustomer = user?.role === "customer";
+  const membershipDisplay = membership
+    ? isCustomer
+      ? getCustomerMembershipDisplayState({
+          planType: membership.planType,
+          subscriptionEndsAt: membership.subscriptionEndsAt,
+        })
+      : getMembershipDisplayState(membership as never)
+    : null;
+  const badge =
+    !isCustomer && membership ? getVerificationBadge(membership.verificationStatus) : null;
   const planType = membership?.planType ?? "none";
   const isActive = subStatus?.isActive ?? false;
+  const showCancelButton =
+    !!membership?.stripeSubscriptionId &&
+    planType !== "free_customer" &&
+    isActive;
 
   const handleCancelSubscription = async () => {
     if (!user?.id) return;
@@ -64,15 +83,28 @@ export default function SubscriptionScreen() {
   }
 
   const billingAmount =
-    planType === "customer_monthly" ? CUSTOMER_MONTHLY_PRICE_DISPLAY
-    : planType === "contractor_annual" || planType === "annual_paid" ? CONTRACTOR_ANNUAL_PRICE_DISPLAY
-    : planType === "verified_contractor_free_year" ? "Free"
-    : "—";
+    planType === "customer_monthly" || planType === "customer_identity_verification"
+      ? CUSTOMER_IDENTITY_VERIFICATION_PRICE_DISPLAY
+      : planType === "free_customer"
+        ? "Free"
+        : planType === "contractor_pro_monthly"
+          ? CONTRACTOR_PRO_MONTHLY_PRICE_DISPLAY
+          : planType === "contractor_annual" || planType === "annual_paid"
+            ? CONTRACTOR_ANNUAL_PRICE_DISPLAY
+            : planType === "verified_contractor_free_year"
+              ? "Free"
+              : "—";
 
   const billingFrequency =
-    planType === "customer_monthly" ? "Monthly"
-    : planType === "contractor_annual" || planType === "annual_paid" || planType === "verified_contractor_free_year" ? "Annual"
-    : "—";
+    planType === "customer_monthly" || planType === "customer_identity_verification"
+      ? "Monthly"
+      : planType === "free_customer"
+        ? "—"
+        : planType === "contractor_pro_monthly"
+          ? "Monthly"
+          : planType === "contractor_annual" || planType === "annual_paid" || planType === "verified_contractor_free_year"
+            ? "Annual"
+            : "—";
 
   const nextBillingDate = membership?.nextBillingDate
     ? new Date(membership.nextBillingDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
@@ -114,7 +146,7 @@ export default function SubscriptionScreen() {
                   <Text style={{ fontSize: 44, marginBottom: 4 }}>📋</Text>
                   <Text style={[s.cardTitle, { color: colors.foreground }]}>No Active Plan</Text>
                   <Text style={[s.cardDesc, { color: colors.muted }]}>
-                    Subscribe to access the platform.
+                    {isCustomer ? BILLING_COPY.customerFree : "Subscribe to access contractor tools on the platform."}
                   </Text>
                 </>
               )}
@@ -157,7 +189,13 @@ export default function SubscriptionScreen() {
               <View style={s.detailRow}>
                 <Text style={[s.detailLabel, { color: colors.muted }]}>Status</Text>
                 <Text style={[s.detailValue, { color: isActive ? "#22c55e" : "#f59e0b", fontWeight: "700" }]}>
-                  {isActive ? "Active" : subStatus?.status === "expired" ? "Expired" : "Inactive"}
+                  {isActive
+                    ? subStatus?.status === "customer_free"
+                      ? "Free account"
+                      : "Active"
+                    : subStatus?.status === "expired"
+                      ? "Expired"
+                      : "Inactive"}
                 </Text>
               </View>
 
@@ -170,7 +208,7 @@ export default function SubscriptionScreen() {
             </View>
 
             {/* ── Actions ─────────────────────────────────────── */}
-            {!isActive && planType === "none" && (
+            {!isCustomer && !isActive && planType === "none" && (
               <View style={{ gap: 12 }}>
                 <Pressable
                   onPress={() => router.push("/contractor-paywall" as never)}
@@ -178,11 +216,23 @@ export default function SubscriptionScreen() {
                 >
                   <Text style={s.actionBtnText}>Get Contractor Access</Text>
                 </Pressable>
+              </View>
+            )}
+
+            {isCustomer && planType === "free_customer" && user && !user.isVerified && (
+              <View style={{ gap: 10 }}>
+                <CustomerVerifyBadgeButton />
                 <Pressable
                   onPress={() => router.push("/customer-paywall" as never)}
-                  style={({ pressed }) => [s.actionBtn, { borderWidth: 1, borderColor: colors.border }, pressed && { opacity: 0.7 }]}
+                  style={({ pressed }) => [
+                    s.actionBtn,
+                    { borderWidth: 1, borderColor: colors.border },
+                    pressed && { opacity: 0.7 },
+                  ]}
                 >
-                  <Text style={[s.actionBtnText, { color: colors.foreground }]}>Get Customer Membership</Text>
+                  <Text style={[s.actionBtnText, { color: colors.foreground }]}>
+                    Or subscribe in the app (payment sheet)
+                  </Text>
                 </Pressable>
               </View>
             )}
@@ -197,7 +247,7 @@ export default function SubscriptionScreen() {
               </View>
             )}
 
-            {isActive && (
+            {showCancelButton && (
               <Pressable
                 onPress={() => setShowCancelModal(true)}
                 style={({ pressed }) => [s.cancelBtn, { borderColor: colors.error }, pressed && { opacity: 0.7 }]}
@@ -213,7 +263,7 @@ export default function SubscriptionScreen() {
                 {BILLING_COPY.paymentSecure}
               </Text>
               <Text style={[s.infoText, { color: colors.muted }]}>
-                {BILLING_COPY.renewalReminder}
+                {isCustomer ? BILLING_COPY.customerFree : BILLING_COPY.renewalReminder}
               </Text>
             </View>
           </>
@@ -224,7 +274,13 @@ export default function SubscriptionScreen() {
         visible={showCancelModal}
         onClose={() => setShowCancelModal(false)}
         onConfirmCancel={handleCancelSubscription}
-        subscriptionPlan={planType === "customer_monthly" ? "monthly" : "yearly"}
+        subscriptionPlan={
+          planType === "customer_monthly" ||
+          planType === "customer_identity_verification" ||
+          planType === "contractor_pro_monthly"
+            ? "monthly"
+            : "yearly"
+        }
         nextBillingDate={membership?.nextBillingDate ?? new Date(Date.now() + 30 * 86400000).toISOString()}
       />
     </ScreenContainer>

@@ -1,5 +1,6 @@
 export type UserRole = "user" | "admin" | "contractor" | "customer";
 
+/** Platform operators: full in-app preview; subscription checks bypass in API (see `checkSubscriptionStatus` / `getMembership`). */
 export function isAdmin(user: { role?: string } | null | undefined): boolean {
   return user?.role === "admin";
 }

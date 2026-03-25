@@ -1,5 +1,7 @@
 import "dotenv/config";
 import express from "express";
+import * as Sentry from "@sentry/node";
+import { nodeProfilingIntegration } from "@sentry/profiling-node";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
@@ -7,11 +9,25 @@ import { createContext } from "./context";
 import riskScoresRouter from "../routes/risk-scores";
 import disputeModerationRouter from "../routes/dispute-moderation";
 import platformRouter from "../routes/platform";
-import { verifyStripeWebhook, handleStripeWebhookEvent } from "../stripe-webhook-handler";
+import billingRouter from "../routes/billing";
+import { handleStripeWebhookHttp } from "../stripe-webhook-handler";
 import { globalLimiter } from "../middleware/rate-limit";
 
 async function startServer() {
   try {
+    const sentryDsn = process.env.SENTRY_DSN ?? "";
+    if (sentryDsn) {
+      Sentry.init({
+        dsn: sentryDsn,
+        sendDefaultPii: true,
+        integrations: [Sentry.expressIntegration(), nodeProfilingIntegration()],
+        tracesSampleRate: 1.0,
+        profileSessionSampleRate: 1.0,
+        profileLifecycle: "trace",
+        enableLogs: true,
+      });
+    }
+
     const app = express();
 
     // Critical: before other routes — liveness for Railway / monitors
@@ -19,12 +35,28 @@ async function startServer() {
       res.status(200).json({ status: "ok" });
     });
 
-    // CORS: echo request Origin so credentialed browser requests work (Expo web on localhost:* → Railway API).
+    const isProd = process.env.NODE_ENV === "production";
+    const staticOrigins = new Set([
+      "http://localhost:8081",
+      "http://localhost:19006",
+      "http://localhost:3000",
+      "https://dist-web-alpha.vercel.app",
+    ]);
+    const extraOrigins = (process.env.FRONTEND_URL ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const o of extraOrigins) staticOrigins.add(o);
+
+    // CORS + credentials: in production only allowlisted origins; in dev reflect any Origin for Expo/tunnels.
     app.use((req, res, next) => {
       const origin = req.headers.origin;
       if (origin) {
-        res.setHeader("Access-Control-Allow-Origin", origin);
-        res.append("Vary", "Origin");
+        const allow = !isProd || staticOrigins.has(origin);
+        if (allow) {
+          res.setHeader("Access-Control-Allow-Origin", origin);
+          res.append("Vary", "Origin");
+        }
       }
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
       res.setHeader(
@@ -43,45 +75,15 @@ async function startServer() {
 
     registerOAuthRoutes(app);
 
-    // Stripe webhook — express.raw gives us the untouched Buffer as req.body.
-    // Registered BEFORE express.json() so the body stream is not consumed.
-    app.post(
-      "/api/webhooks/stripe",
-      express.raw({ type: "application/json" }),
-      async (req, res) => {
-        const signature = req.headers["stripe-signature"] as string;
-        if (!signature) {
-          return res.status(400).json({ error: "Missing stripe-signature header" });
-        }
-        if (!req.body || !Buffer.isBuffer(req.body) || req.body.length === 0) {
-          console.error(
-            "[Stripe webhook] Empty or non-Buffer body. type:",
-            typeof req.body,
-            "isBuffer:",
-            Buffer.isBuffer(req.body),
-            "length:",
-            req.body?.length ?? 0,
-          );
-          return res.status(400).json({ error: "Empty request body" });
-        }
-        let event;
-        try {
-          event = verifyStripeWebhook(req.body, signature);
-        } catch (err) {
-          console.error("[Stripe webhook] Signature verification failed:", (err as Error).message);
-          return res
-            .status(400)
-            .json({ error: "Webhook signature verification failed", detail: (err as Error).message });
-        }
-        try {
-          const result = await handleStripeWebhookEvent(event);
-          return res.json({ success: true, eventId: event.id, alreadyProcessed: result.alreadyProcessed ?? false });
-        } catch (err) {
-          console.error("[Stripe webhook] Event processing failed:", err);
-          return res.status(500).json({ error: "Webhook event processing failed", eventId: event.id });
-        }
-      },
-    );
+    // Stripe webhooks: MUST use raw body only — never attach express.json() (or any JSON body parser)
+    // to these paths; signature verification requires the exact bytes Stripe sent.
+    // Registered strictly BEFORE app.use(express.json()) below.
+    const stripeWebhookRaw = express.raw({ type: "application/json", limit: "1mb" });
+    const stripeWebhook = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      void handleStripeWebhookHttp(req, res).catch(next);
+    };
+    app.post("/api/stripe/webhook", stripeWebhookRaw, stripeWebhook);
+    app.post("/api/webhooks/stripe", stripeWebhookRaw, stripeWebhook);
 
     app.use(express.json({ limit: "50mb" }));
     app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -97,6 +99,7 @@ async function startServer() {
 
     app.use("/api/risk-scores", riskScoresRouter);
     app.use("/api/disputes/moderation", disputeModerationRouter);
+    app.use("/api/billing", billingRouter);
     app.use("/api", platformRouter);
 
     // Railway healthcheckPath: plain GET (no tRPC batch query string) — must bypass tRPC HTTP parsing
@@ -111,6 +114,11 @@ async function startServer() {
         createContext,
       }),
     );
+
+    if (sentryDsn) {
+      // Register after controllers so Express errors are captured before any custom error middleware.
+      Sentry.setupExpressErrorHandler(app);
+    }
 
     const port = process.env.PORT ? Number(process.env.PORT) : 3000;
 

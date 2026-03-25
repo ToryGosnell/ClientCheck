@@ -68,21 +68,36 @@ export const getRedirectUri = () => {
   });
 };
 
-export const getLoginUrl = () => {
+function getOAuthStartBase(): string | null {
+  const candidate = OAUTH_SERVER_URL || getApiBaseUrl();
+  if (!candidate) return null;
+  const url = safeUrl(candidate);
+  return url?.toString().replace(/\/$/, "") ?? null;
+}
+
+export const getLoginUrl = (options?: { accountType?: string }): string | null => {
   const redirectUri = getRedirectUri();
   const state = encodeState(redirectUri);
 
-  const portalBase = OAUTH_PORTAL_URL || getApiBaseUrl();
-  const url = safeUrl(`${portalBase}/app-auth`);
+  const startBase = getOAuthStartBase();
+  if (!startBase) {
+    console.warn("[OAuth] Cannot build login URL — configure EXPO_PUBLIC_OAUTH_SERVER_URL.");
+    return null;
+  }
+
+  const url = safeUrl(`${startBase}/api/oauth/start`);
   if (!url) {
-    console.warn("[OAuth] Cannot build login URL — OAUTH_PORTAL_URL is not configured.");
-    return `${getApiBaseUrl()}/oauth/callback?error=misconfigured`;
+    console.warn("[OAuth] Cannot build login URL from configured OAuth server URL.");
+    return null;
   }
 
   url.searchParams.set("appId", APP_ID);
-  url.searchParams.set("redirectUri", redirectUri);
+  url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("state", state);
   url.searchParams.set("type", "signIn");
+  if (options?.accountType) {
+    url.searchParams.set("account_type", options.accountType);
+  }
 
   return url.toString();
 };
@@ -90,12 +105,14 @@ export const getLoginUrl = () => {
 /**
  * Start OAuth login flow.
  */
-export async function startOAuthLogin(): Promise<string | null> {
-  const loginUrl = getLoginUrl();
+export async function startOAuthLogin(options?: { accountType?: string }): Promise<string | null> {
+  const loginUrl = getLoginUrl(options);
+  if (!loginUrl) return null;
 
   if (ReactNative.Platform.OS === "web") {
     if (typeof window !== "undefined") {
       window.location.href = loginUrl;
+      return loginUrl;
     }
     return null;
   }
@@ -107,6 +124,7 @@ export async function startOAuthLogin(): Promise<string | null> {
       return null;
     }
     await Linking.openURL(loginUrl);
+    return loginUrl;
   } catch (error) {
     console.warn("[OAuth] Failed to open login URL:", error);
   }

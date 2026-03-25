@@ -2,9 +2,11 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, FlatLi
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/use-colors";
+import { useAuthWithLoginRedirect } from "@/hooks/use-auth-with-login-redirect";
 import { ScreenContainer } from "@/components/screen-container";
 import { ScreenBackground } from "@/components/screen-background";
 import { trpc } from "@/lib/trpc";
+import { CustomerNameWithVerifiedBadge } from "@/components/customer-identity-verified-badge";
 
 interface SearchResult {
   id: number;
@@ -16,11 +18,13 @@ interface SearchResult {
   zip?: string;
   overallRating: any;
   reviewCount: number;
+  identityVerified?: boolean;
 }
 
 export default function AdvancedSearchScreen() {
   const colors = useColors();
   const router = useRouter();
+  const { contentReady } = useAuthWithLoginRedirect();
   const [name, setName] = useState("");
   const [state, setState] = useState("");
   const [zip, setZip] = useState("");
@@ -64,9 +68,12 @@ export default function AdvancedSearchScreen() {
     >
       <View style={styles.cardHeader}>
         <View style={styles.nameSection}>
-          <Text style={[styles.customerName, { color: colors.foreground }]}>
-            {item.firstName} {item.lastName}
-          </Text>
+          <CustomerNameWithVerifiedBadge
+            firstName={item.firstName}
+            lastName={item.lastName}
+            identityVerified={item.identityVerified}
+            textStyle={[styles.customerName, { color: colors.foreground }]}
+          />
           <View style={styles.ratingBadge}>
             <Text style={styles.ratingText}>★ {parseFloat(item.overallRating ?? "0").toFixed(1)}</Text>
             <Text style={[styles.reviewCount, { color: colors.muted }]}>
@@ -93,6 +100,16 @@ export default function AdvancedSearchScreen() {
       <Text style={[styles.viewReviews, { color: colors.primary }]}>View All Reviews →</Text>
     </TouchableOpacity>
   );
+
+  if (!contentReady) {
+    return (
+      <ScreenBackground backgroundKey="auth">
+        <ScreenContainer containerClassName="bg-transparent" className="flex-1 items-center justify-center">
+          <ActivityIndicator size="large" color={colors.primary} />
+        </ScreenContainer>
+      </ScreenBackground>
+    );
+  }
 
   return (
     <ScreenBackground backgroundKey="search">

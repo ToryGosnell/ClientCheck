@@ -44,7 +44,8 @@ export function PaywallOverlay({ customerName, score, reviewCount }: Props) {
           before you commit to the job.
         </Text>
         <Text style={st.pricingLine}>
-          Contractors: 12 months free, then $120/year. Sign in to start — no card required for the free period.
+          Contractors: free tier with limited searches, or Pro ($19/mo or $149/yr) for unlimited search, risk scores,
+          red flags, and alerts. Sign in to continue.
         </Text>
         <Pressable
           onPress={goUnlock}

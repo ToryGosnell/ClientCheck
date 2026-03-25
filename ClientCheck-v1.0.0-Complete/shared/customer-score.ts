@@ -45,7 +45,8 @@ export interface CustomerScoreResult {
 export interface ScoreInput {
   reviews: Array<{
     overallRating: number;
-    ratingPaymentReliability: number;
+    /** Omit from payment subscore when null (N/A). */
+    ratingPaymentReliability: number | null;
     createdAt: string | Date;
     redFlags?: string | null;
   }>;
@@ -86,12 +87,14 @@ export function computeCustomerScore(input: ScoreInput): CustomerScoreResult {
   let paymentRaw = 0;
   for (const r of reviews) {
     const pr = r.ratingPaymentReliability;
-    if (pr >= 4) {
-      paymentRaw += 5; // paid_on_time
-    } else if (pr >= 2) {
-      paymentRaw -= 10; // late_payment
-    } else if (pr >= 1) {
-      paymentRaw -= 25; // non_payment
+    if (pr != null && pr >= 1 && pr <= 5) {
+      if (pr >= 4) {
+        paymentRaw += 5; // paid_on_time
+      } else if (pr >= 2) {
+        paymentRaw -= 10; // late_payment
+      } else if (pr >= 1) {
+        paymentRaw -= 25; // non_payment
+      }
     }
 
     const flags = (r.redFlags ?? "").toLowerCase();
@@ -104,7 +107,7 @@ export function computeCustomerScore(input: ScoreInput): CustomerScoreResult {
 
   // ── 2. Review Ratings (0–25) ────────────────────────────────────────────
   const avgRating =
-    reviews.reduce((sum, r) => sum + (r.overallRating || 0), 0) / reviewCount;
+    reviews.reduce((sum, r) => sum + r.overallRating, 0) / reviewCount;
   const rating = clamp((avgRating / 5) * 25, 0, 25);
 
   // ── 3. Disputes (0–20) ──────────────────────────────────────────────────
@@ -127,7 +130,7 @@ export function computeCustomerScore(input: ScoreInput): CustomerScoreResult {
   let recency = 0;
   if (recentReviews.length > 0) {
     const avgRecent =
-      recentReviews.reduce((s, r) => s + (r.overallRating || 0), 0) / recentReviews.length;
+      recentReviews.reduce((s, r) => s + r.overallRating, 0) / recentReviews.length;
     recency = avgRecent >= 3.5 ? 5 : -5;
   }
   recency = clamp(recency + 5, 0, 5);
@@ -173,8 +176,10 @@ function computeTrend(
   const olderHalf = sorted.slice(0, mid);
   const newerHalf = sorted.slice(mid);
 
-  const avgOld = olderHalf.reduce((s, r) => s + r.overallRating, 0) / olderHalf.length;
-  const avgNew = newerHalf.reduce((s, r) => s + r.overallRating, 0) / newerHalf.length;
+  const avgOld =
+    olderHalf.reduce((s, r) => s + r.overallRating, 0) / Math.max(olderHalf.length, 1);
+  const avgNew =
+    newerHalf.reduce((s, r) => s + r.overallRating, 0) / Math.max(newerHalf.length, 1);
   const delta = Math.round((avgNew - avgOld) * 10);
 
   if (delta >= 3) return { trend: "improving", trendDelta: delta };

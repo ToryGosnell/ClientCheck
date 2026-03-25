@@ -15,7 +15,8 @@ import { attachMockAuth, authenticatePartnerApiKey, persistentRateLimit, require
 import { writeAuditLog } from "../services/audit-log-service";
 import { queueNotification, getNotificationStatus, listNotificationHistory } from "../services/notification-delivery-service";
 import { findPotentialIdentityMatches, mergeCustomers, upsertCustomerIdentityProfile } from "../services/identity-resolution-service";
-import { getDb, searchCustomersApi } from "../db";
+import { recordContractorInviteSignup } from "../contractor-invite-referral-service";
+import { getDb, getWeeklyDistinctCustomerProfileViews, recordShareReferralOnce, searchCustomersApi } from "../db";
 import { disputeEscalations, integrationUsageEvents, partnerApiKeyRotations, partnerApiKeyScopes, partnerApiKeys, reviewPolicyAcceptances } from "../../drizzle/schema";
 import { createHash, randomBytes } from "crypto";
 
@@ -28,6 +29,21 @@ function jsonSafeForCustomerSearch(_key: string, value: unknown): unknown {
   if (typeof Buffer !== "undefined" && Buffer.isBuffer(value)) return value.toString("utf8");
   return value;
 }
+
+/** Weekly distinct contractor views for share-modal social proof (authenticated). */
+router.get("/customers/:customerId/view-stats", requireUser(), async (req: AuthenticatedRequest, res) => {
+  try {
+    const customerId = Number(req.params.customerId);
+    if (!Number.isFinite(customerId) || customerId < 1) {
+      return res.status(400).json({ error: "Invalid customer id" });
+    }
+    const weeklyViews = await getWeeklyDistinctCustomerProfileViews(customerId);
+    return res.status(200).json({ weeklyViews });
+  } catch (error) {
+    console.error("[GET /customers/:customerId/view-stats]", error);
+    return res.status(500).json({ error: "Failed to load view stats" });
+  }
+});
 
 /** Public customer name search (homepage / search tab) — GET /api/customers?search= */
 router.get("/customers", async (req, res) => {
@@ -52,6 +68,38 @@ router.get("/customers", async (req, res) => {
       console.error("[GET /api/customers] mysql:", { code: my.code, errno: my.errno, sqlMessage: my.sqlMessage });
     }
     return res.status(500).json({ error: "Customer search failed", results: [] });
+  }
+});
+
+/** Contractor invite link (/invite?ref=) — record signup attribution once. */
+router.post("/growth/record-contractor-invite-referral", requireUser(), async (req: AuthenticatedRequest, res) => {
+  try {
+    const referrerId = Number((req.body as { referrerId?: unknown })?.referrerId);
+    if (!Number.isFinite(referrerId) || referrerId < 1) {
+      return res.status(400).json({ ok: false, error: "referrerId is required" });
+    }
+    const referredUserId = req.auth!.userId!;
+    const result = await recordContractorInviteSignup({ referredUserId, referrerId });
+    return res.status(result.ok ? 200 : 400).json(result);
+  } catch (error) {
+    console.error("[POST /growth/record-contractor-invite-referral]", error);
+    return res.status(500).json({ ok: false, error: "Failed to record invite referral" });
+  }
+});
+
+/** One-time attribution when a new session follows a shared customer link (`?ref=`). */
+router.post("/growth/record-share-referral", requireUser(), async (req: AuthenticatedRequest, res) => {
+  try {
+    const referrerUserId = Number((req.body as { referrerUserId?: unknown })?.referrerUserId);
+    if (!Number.isFinite(referrerUserId) || referrerUserId < 1) {
+      return res.status(400).json({ ok: false, error: "referrerUserId is required" });
+    }
+    const userId = req.auth!.userId!;
+    const result = await recordShareReferralOnce({ userId, referrerUserId });
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("[POST /growth/record-share-referral]", error);
+    return res.status(500).json({ ok: false, error: "Failed to record referral" });
   }
 });
 

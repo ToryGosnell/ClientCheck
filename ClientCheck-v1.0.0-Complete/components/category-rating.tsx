@@ -2,40 +2,57 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useColors } from "@/hooks/use-colors";
 import { StarRating } from "@/components/star-rating";
 
+/** `undefined` = not chosen yet; `null` = N/A; `1`–`5` = star rating. */
+export type CategoryRatingValue = 1 | 2 | 3 | 4 | 5 | null | undefined;
+
 interface CategoryRatingProps {
   label: string;
   description?: string;
-  rating: number | null;
-  notApplicable?: boolean;
-  onRatingChange?: (rating: number) => void;
-  onNotApplicableChange?: (na: boolean) => void;
+  value: CategoryRatingValue;
+  onValueChange?: (value: CategoryRatingValue) => void;
   interactive?: boolean;
 }
 
 export function CategoryRating({
   label,
   description,
-  rating,
-  notApplicable = false,
-  onRatingChange,
-  onNotApplicableChange,
+  value,
+  onValueChange,
   interactive = false,
 }: CategoryRatingProps) {
   const colors = useColors();
 
+  const isNaSelected = value === null;
+  const starRating = typeof value === "number" && value >= 1 && value <= 5 ? value : 0;
+
   const handleStarPress = (r: number) => {
-    if (notApplicable) onNotApplicableChange?.(false);
-    onRatingChange?.(r);
+    if (r >= 1 && r <= 5) onValueChange?.(r as 1 | 2 | 3 | 4 | 5);
   };
 
   const handleNaPress = () => {
-    const next = !notApplicable;
-    onNotApplicableChange?.(next);
-    if (next) onRatingChange?.(0);
+    if (value === null) {
+      onValueChange?.(undefined);
+      return;
+    }
+    onValueChange?.(null);
   };
 
+  const naHighlight = interactive && isNaSelected;
+
   return (
-    <View style={styles.container}>
+    <View
+      style={[
+        styles.container,
+        naHighlight && {
+          backgroundColor: "rgba(59, 130, 246, 0.08)",
+          borderRadius: 10,
+          paddingHorizontal: 8,
+          marginHorizontal: -8,
+          borderLeftWidth: 3,
+          borderLeftColor: "#3b82f6",
+        },
+      ]}
+    >
       <View style={styles.labelContainer}>
         <Text style={[styles.label, { color: colors.foreground }]}>{label}</Text>
         {!!description && (
@@ -43,11 +60,13 @@ export function CategoryRating({
         )}
       </View>
       <View style={styles.ratingArea}>
-        {notApplicable ? (
-          <Text style={[styles.naActive, { color: colors.muted }]}>N/A</Text>
+        {isNaSelected ? (
+          <Text style={[styles.naActive, { color: naHighlight ? colors.primary : colors.muted }]}>
+            N/A
+          </Text>
         ) : (
           <StarRating
-            rating={rating ?? 0}
+            rating={starRating}
             size={interactive ? 26 : 18}
             interactive={interactive}
             onRatingChange={handleStarPress}
@@ -60,8 +79,8 @@ export function CategoryRating({
             style={({ pressed }) => [
               styles.naBtn,
               {
-                backgroundColor: notApplicable ? colors.primary + "22" : "transparent",
-                borderColor: notApplicable ? colors.primary : colors.border,
+                backgroundColor: isNaSelected ? "rgba(255,255,255,0.22)" : "transparent",
+                borderColor: isNaSelected ? "rgba(255,255,255,0.55)" : colors.border,
               },
               pressed && { opacity: 0.7 },
             ]}
@@ -69,7 +88,8 @@ export function CategoryRating({
             <Text
               style={[
                 styles.naBtnText,
-                { color: notApplicable ? colors.primary : colors.muted },
+                { color: isNaSelected ? "rgba(255,255,255,0.95)" : colors.muted },
+                isNaSelected && { fontWeight: "800" },
               ]}
             >
               N/A

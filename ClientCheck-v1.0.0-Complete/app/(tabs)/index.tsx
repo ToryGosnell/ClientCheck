@@ -1,8 +1,8 @@
 import { useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from "react-native";
-import { API_BASE_URL, apiUrl } from "@/lib/api";
+import { LinearGradient } from "expo-linear-gradient";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Animated, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
 import { ScreenBackground } from "@/components/screen-background";
 import { ReviewCard } from "@/components/review-card";
@@ -17,13 +17,100 @@ import { computeRiskScore } from "@/lib/risk-score";
 import {
   getRecentSearches,
   getWatchedCustomers,
-  addRecentSearch,
   hydrateUserDataFromDevice,
   type WatchedCustomer,
 } from "@/lib/user-data";
 import { track } from "@/lib/analytics";
-import { isAlgoliaClientSearchConfigured, searchCustomersViaAlgolia } from "@/lib/algolia-customer-search";
 import type { ReviewWithContractor } from "@/shared/types";
+import { CustomerIdentityVerifiedBadge } from "@/components/customer-identity-verified-badge";
+
+/** Top/bottom gradient stops from theme primary (subtle highlight → deeper red). */
+function primaryGradientStops(primary: string): [string, string] {
+  const raw = primary.replace(/^#/, "");
+  if (raw.length !== 6 || !/^[0-9a-fA-F]+$/.test(raw)) {
+    return [primary, primary];
+  }
+  const n = parseInt(raw, 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  const lift = (c: number) => Math.min(255, Math.round(c + (255 - c) * 0.14));
+  const shade = (c: number) => Math.max(0, Math.round(c * 0.82));
+  const toHex = (rr: number, gg: number, bb: number) =>
+    `#${[rr, gg, bb].map((x) => x.toString(16).padStart(2, "0")).join("")}`;
+  return [toHex(lift(r), lift(g), lift(b)), toHex(shade(r), shade(g), shade(b))];
+}
+
+function LandingSignInButton({
+  label,
+  onPress,
+  primaryColor,
+}: {
+  label: string;
+  onPress: () => void;
+  primaryColor: string;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const [pressed, setPressed] = useState(false);
+  const scale = useRef(new Animated.Value(1)).current;
+  const gradientColors = useMemo(() => primaryGradientStops(primaryColor), [primaryColor]);
+
+  const targetScale = pressed ? 0.98 : hovered ? 1.02 : 1;
+  useEffect(() => {
+    Animated.spring(scale, {
+      toValue: targetScale,
+      friction: 8,
+      tension: 200,
+      useNativeDriver: true,
+    }).start();
+  }, [targetScale, scale]);
+
+  const webShadow = hovered
+    ? "0 10px 28px rgba(0,0,0,0.28), 0 4px 10px rgba(0,0,0,0.14)"
+    : "0 6px 20px rgba(0,0,0,0.22), 0 2px 6px rgba(0,0,0,0.1)";
+
+  return (
+    <Animated.View
+      style={[
+        st.landingBtnOuter,
+        { transform: [{ scale }] },
+        Platform.OS === "web"
+          ? ({
+              boxShadow: webShadow,
+              transition: "box-shadow 0.22s ease-out",
+            } as object)
+          : {
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: hovered ? 8 : 5 },
+              shadowOpacity: hovered ? 0.3 : 0.22,
+              shadowRadius: hovered ? 16 : 12,
+              elevation: hovered ? 10 : 7,
+            },
+      ]}
+    >
+      <Pressable
+        onPress={onPress}
+        onHoverIn={() => setHovered(true)}
+        onHoverOut={() => setHovered(false)}
+        onPressIn={() => setPressed(true)}
+        onPressOut={() => setPressed(false)}
+        style={({ pressed: p }) => [
+          st.landingBtnInner,
+          Platform.OS === "web" ? ({ cursor: "pointer" } as object) : {},
+          p && Platform.OS !== "web" ? { opacity: 0.94 } : {},
+        ]}
+      >
+        <LinearGradient
+          colors={gradientColors}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={StyleSheet.absoluteFillObject}
+        />
+        <Text style={st.signInPrimaryBtnText}>{label}</Text>
+      </Pressable>
+    </Animated.View>
+  );
+}
 
 const PREVIEW_CUSTOMERS = [
   {
@@ -46,137 +133,13 @@ const PREVIEW_CUSTOMERS = [
   },
 ];
 
-function useDebounced(value: string, delay: number) {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(value), delay);
-    return () => clearTimeout(t);
-  }, [value, delay]);
-  return debounced;
-}
-
-const HOME_SEARCH_DEBOUNCE_MS = 300;
-
-function HighlightMatch({ text, query, baseStyle, tint }: { text: string; query: string; baseStyle: any; tint: string }) {
-  const q = query.trim();
-  if (!q || q.length < 2) return <Text style={baseStyle}>{text}</Text>;
-  const lower = text.toLowerCase();
-  const qi = lower.indexOf(q.toLowerCase());
-  if (qi === -1) return <Text style={baseStyle}>{text}</Text>;
-  return (
-    <Text style={baseStyle}>
-      {text.slice(0, qi)}
-      <Text style={{ backgroundColor: tint }}>{text.slice(qi, qi + q.length)}</Text>
-      {text.slice(qi + q.length)}
-    </Text>
-  );
-}
-
 export default function HomeScreen() {
   const colors = useColors();
   const router = useRouter();
   const { user, isAuthenticated } = useAuth();
-  const [landingQuery, setLandingQuery] = useState("");
   const [watched, setWatched] = useState<WatchedCustomer[]>([]);
   const [recentSearchTerms, setRecentSearchTerms] = useState<string[]>([]);
   const { scope, userState, userCity, setScope, filter: filterByLoc, locationLabel } = useLocationScope();
-
-  // Live autocomplete: GET /api/customers?search= (debounced)
-  const debouncedLanding = useDebounced(landingQuery.trim(), HOME_SEARCH_DEBOUNCE_MS);
-  const canAutoSearch = debouncedLanding.length >= 2;
-  const [homeSearchResults, setHomeSearchResults] = useState<Record<string, unknown>[]>([]);
-  const [homeSearchLoading, setHomeSearchLoading] = useState(false);
-  const [homeSearchError, setHomeSearchError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!canAutoSearch) {
-      setHomeSearchResults([]);
-      setHomeSearchError(null);
-      setHomeSearchLoading(false);
-      return;
-    }
-    const ac = new AbortController();
-    setHomeSearchLoading(true);
-    setHomeSearchError(null);
-    (async () => {
-      if (isAlgoliaClientSearchConfigured()) {
-        try {
-          const rows = await searchCustomersViaAlgolia({
-            query: debouncedLanding,
-            state: userState && userState.length === 2 ? userState : undefined,
-            hitsPerPage: 15,
-          });
-          if (ac.signal.aborted) return;
-          if (rows.length > 0) {
-            console.log("[customer-search] home Algolia hits", { count: rows.length });
-            setHomeSearchResults(rows as unknown as Record<string, unknown>[]);
-            setHomeSearchError(null);
-            setHomeSearchLoading(false);
-            return;
-          }
-          // Algolia OK but empty index — use live REST results
-        } catch {
-          if (ac.signal.aborted) return;
-          // fall through to REST fallback
-        }
-      }
-
-      const finalUrl = apiUrl(`/customers?search=${encodeURIComponent(debouncedLanding)}`);
-      console.log("SEARCH URL", finalUrl);
-      try {
-        // Public search: omit credentials avoids cross-site cookie / credentialed-CORS edge cases (localhost → Railway).
-        const res = await fetch(finalUrl, { signal: ac.signal, credentials: "omit" });
-        const text = await res.text();
-        if (ac.signal.aborted) return;
-        let data: { results?: unknown[]; error?: string } = {};
-        try {
-          data = text ? (JSON.parse(text) as { results?: unknown[]; error?: string }) : {};
-        } catch {
-          setHomeSearchError(
-            __DEV__
-              ? `HTTP ${res.status} ${res.statusText} — response not JSON. Body: ${text.slice(0, 160)}… | URL: ${finalUrl}`
-              : "Search failed. Check your connection and try again.",
-          );
-          setHomeSearchResults([]);
-          return;
-        }
-        if (!res.ok) {
-          setHomeSearchError(
-            __DEV__
-              ? `HTTP ${res.status} ${res.statusText}: ${data?.error ?? text.slice(0, 200)} | URL: ${finalUrl}`
-              : "Search failed. Check your connection and try again.",
-          );
-          setHomeSearchResults([]);
-          return;
-        }
-        const list = Array.isArray(data.results) ? data.results : [];
-        console.log("[customer-search] home REST parsed response", {
-          httpStatus: res.status,
-          resultsCount: list.length,
-        });
-        setHomeSearchResults(list as Record<string, unknown>[]);
-        console.log("[customer-search] home rendered autocomplete rows", { count: list.length });
-      } catch (e: unknown) {
-        if (ac.signal.aborted) return;
-        const err = e as { name?: string; message?: string };
-        if (err?.name === "AbortError") return;
-        const msg = err?.message ?? String(e);
-        if (__DEV__) {
-          const corsHint =
-            /failed to fetch|networkerror|load failed|network request failed/i.test(msg)
-              ? " (often CORS, offline, or blocked request — check DevTools Network)"
-              : "";
-          setHomeSearchError(`Fetch error: ${msg}${corsHint} | API_BASE: ${API_BASE_URL} | URL: ${finalUrl}`);
-        } else {
-          setHomeSearchError("Search failed. Check your connection and try again.");
-        }
-        setHomeSearchResults([]);
-      } finally {
-        if (!ac.signal.aborted) setHomeSearchLoading(false);
-      }
-    })();
-    return () => ac.abort();
-  }, [debouncedLanding, canAutoSearch, userState]);
 
   const { data: flaggedCustomers, isLoading: loadingFlagged } = trpc.customers.getFlagged.useQuery(
     undefined, { enabled: isAuthenticated }
@@ -188,7 +151,8 @@ export default function HomeScreen() {
   const { data: membership } = trpc.subscription.getMembership.useQuery(
     undefined, { enabled: isAuthenticated }
   );
-  const membershipDisplay = membership ? getMembershipDisplayState(membership) : null;
+  const membershipDisplay =
+    membership && user?.role !== "customer" ? getMembershipDisplayState(membership) : null;
 
   useEffect(() => {
     void (async () => {
@@ -216,15 +180,6 @@ export default function HomeScreen() {
     }
   }, []);
 
-  const handleLandingSearch = () => {
-    if (landingQuery.trim().length >= 2) {
-      addRecentSearch(landingQuery.trim());
-      router.push({ pathname: "/(tabs)/search", params: { q: landingQuery.trim() } } as never);
-    } else {
-      router.push("/(tabs)/search" as never);
-    }
-  };
-
   // ── LANDING (unauthenticated) ────────────────────────────────────────────────
   if (!isAuthenticated) {
     return (
@@ -235,135 +190,23 @@ export default function HomeScreen() {
             <Text style={st.heroKicker}>For contractors</Text>
             <Text style={st.heroHeadline}>Check customer history before you take a job.</Text>
             <Text style={st.heroSub}>
-              Search a customer to get started — see contractor-reported experiences, risk signals, and dispute-aware context.
+              Sign in to access customer history, risk insights, and contractor reviews.
             </Text>
 
-            {/* Inline search with autocomplete */}
-            <View style={st.landingSearchWrap}>
-              <Text style={st.landingHint}>
-                Search a customer to get started — type a name; results appear as you type.
-              </Text>
-              <TextInput
-                style={st.landingSearchInput}
-                placeholder="Search by customer name…"
-                placeholderTextColor="rgba(255,255,255,0.35)"
-                value={landingQuery}
-                onChangeText={setLandingQuery}
-                onSubmitEditing={handleLandingSearch}
-                returnKeyType="search"
-              />
-
-              {/* Autocomplete dropdown — GET /api/customers?search= */}
-              {canAutoSearch && (
-                <View style={st.autoDropdown}>
-                  {homeSearchLoading ? (
-                    <View style={st.autoRow}>
-                      <ActivityIndicator size="small" color={colors.primary} style={{ marginRight: 10 }} />
-                      <Text style={st.autoHint}>Searching…</Text>
-                    </View>
-                  ) : homeSearchError ? (
-                    <View style={[st.autoRow, { flexDirection: "column", alignItems: "stretch" }]}>
-                      <Text style={[st.autoHint, st.autoError]}>{homeSearchError}</Text>
-                      {!__DEV__ ? (
-                        <Text style={[st.autoHint, { marginTop: 6, opacity: 0.9 }]}>Change your search and try again.</Text>
-                      ) : null}
-                    </View>
-                  ) : homeSearchResults.length === 0 ? (
-                    <View style={[st.autoRow, { flexDirection: "column", alignItems: "stretch", gap: 6 }]}>
-                      <Text style={st.autoHint}>No customer profiles matched that search.</Text>
-                      <Text style={[st.autoHint, { opacity: 0.85, fontSize: 12 }]}>
-                        Try another spelling, widen what you type, or tap Open customer search for the full Search tab.
-                      </Text>
-                    </View>
-                  ) : (
-                    <ScrollView
-                      style={st.autoListScroll}
-                      keyboardShouldPersistTaps="handled"
-                      nestedScrollEnabled
-                      showsVerticalScrollIndicator
-                    >
-                      {homeSearchResults.map((raw) => {
-                        const c = raw as {
-                          id: number;
-                          firstName?: string;
-                          lastName?: string;
-                          city?: string | null;
-                          state?: string | null;
-                          reviewCount?: number;
-                          overallRating?: string | null;
-                        };
-                        const risk = computeRiskScore(c as any);
-                        const fullName = `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim();
-                        const loc = [c.city, c.state].filter(Boolean).join(", ");
-                        const highlightTint = colors.primary + "35";
-                        return (
-                          <Pressable
-                            key={String(c.id)}
-                            onPress={() => {
-                              setLandingQuery("");
-                              addRecentSearch(fullName || debouncedLanding);
-                              router.push(`/customer/${c.id}?from=search` as never);
-                            }}
-                            style={({ pressed }) => [st.autoItem, pressed && { backgroundColor: "rgba(255,255,255,0.08)" }]}
-                          >
-                            <View style={[st.autoAvatar, { backgroundColor: risk.color }]}>
-                              <Text style={st.autoInitials}>
-                                {(c.firstName?.[0] ?? "?")}{(c.lastName?.[0] ?? "?")}
-                              </Text>
-                            </View>
-                            <View style={st.autoItemBody}>
-                              <HighlightMatch
-                                text={fullName || "Unknown"}
-                                query={debouncedLanding}
-                                baseStyle={st.autoName}
-                                tint={highlightTint}
-                              />
-                              <HighlightMatch
-                                text={loc || "—"}
-                                query={debouncedLanding}
-                                baseStyle={st.autoLoc}
-                                tint={highlightTint}
-                              />
-                              {(c.reviewCount ?? 0) > 0 && (
-                                <Text style={st.autoReviews}>
-                                  {c.reviewCount} review{(c.reviewCount ?? 0) !== 1 ? "s" : ""}
-                                </Text>
-                              )}
-                            </View>
-                            <View style={st.autoScoreCol}>
-                              <Text style={[st.autoScore, { color: risk.color }]}>{risk.score}</Text>
-                              <Text style={[st.autoScoreLabel, { color: risk.color }]}>Risk</Text>
-                            </View>
-                          </Pressable>
-                        );
-                      })}
-                    </ScrollView>
-                  )}
-                </View>
-              )}
-
-              <Pressable
-                onPress={handleLandingSearch}
-                style={({ pressed }) => [st.landingSearchBtn, { backgroundColor: colors.primary }, pressed && { opacity: 0.85 }]}
-              >
-                <Text style={st.landingSearchBtnText}>Open customer search</Text>
-              </Pressable>
-            </View>
-            <Text style={st.ctaSub}>Sign in for full customer profiles, tracking, and Alerts.</Text>
             <View style={st.signInActions}>
-              <Pressable
+              <LandingSignInButton
+                label="Contractor Sign In"
+                primaryColor={colors.primary}
                 onPress={() => router.push({ pathname: "/select-account", params: { preset: "contractor" } } as never)}
-                style={({ pressed }) => [st.signInPrimaryBtn, { backgroundColor: colors.primary, borderColor: colors.primary }, pressed && { opacity: 0.88 }]}
-              >
-                <Text style={st.signInPrimaryBtnText}>Contractor sign in</Text>
-              </Pressable>
-              <Pressable
+              />
+              <LandingSignInButton
+                label="Customer Sign In"
+                primaryColor={colors.primary}
                 onPress={() => router.push({ pathname: "/select-account", params: { preset: "customer" } } as never)}
-                style={({ pressed }) => [st.signInSecondaryBtn, { borderColor: "rgba(255,255,255,0.35)" }, pressed && { opacity: 0.88 }]}
-              >
-                <Text style={[st.signInSecondaryBtnText, { color: colors.foreground }]}>Customer sign in</Text>
-              </Pressable>
-              <Text style={[st.signInHint, { color: colors.muted }]}>Same secure sign-in for new and returning users</Text>
+              />
+              <Text style={st.landingAccountsNote}>
+                Create an account to access customer history, reviews, and alerts.
+              </Text>
             </View>
 
             {/* Trust strip */}
@@ -387,15 +230,8 @@ export default function HomeScreen() {
 
               {PREVIEW_CUSTOMERS.map((c, i) => {
                 const risk = computeRiskScore(c);
-                const demoQuery = `${c.firstName} ${c.lastName}`.trim();
                 return (
-                  <Pressable
-                    key={i}
-                    onPress={() =>
-                      router.push({ pathname: "/(tabs)/search", params: { q: demoQuery } } as never)
-                    }
-                    style={({ pressed }) => [st.previewCard, { borderColor: risk.color + "44" }, pressed && { opacity: 0.8 }]}
-                  >
+                  <View key={i} style={[st.previewCard, { borderColor: risk.color + "44" }]}>
                     <View style={st.previewCardTop}>
                       <View style={[st.previewAvatar, { backgroundColor: risk.color }]}>
                         <Text style={st.previewInitials}>{c.firstName[0]}{c.lastName[0]}</Text>
@@ -429,7 +265,7 @@ export default function HomeScreen() {
                         ))}
                       </View>
                     )}
-                  </Pressable>
+                  </View>
                 );
               })}
             </View>
@@ -508,7 +344,7 @@ export default function HomeScreen() {
           </Pressable>
         ) : membershipDisplay?.statusColor === "gray" ? (
           <Pressable onPress={() => router.push("/(tabs)/profile")} style={[st.verifyBanner, { borderColor: colors.primary + "33" }]}>
-            <Text style={[st.verifyTitle, { color: colors.primary }]}>12 months free for verified contractors</Text>
+            <Text style={[st.verifyTitle, { color: colors.primary }]}>Verify to unlock the contractor free tier</Text>
             <Text style={[st.verifyBody, { color: colors.muted }]}>Submit your license number to get started →</Text>
           </Pressable>
         ) : null}
@@ -561,7 +397,12 @@ export default function HomeScreen() {
                     <View style={[st.watchedAvatar, { backgroundColor: risk.color }]}>
                       <Text style={st.watchedInitials}>{c.firstName[0]}{c.lastName[0]}</Text>
                     </View>
-                    <Text style={[st.watchedName, { color: colors.foreground }]} numberOfLines={1}>{c.firstName} {c.lastName}</Text>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 5, maxWidth: 120 }}>
+                      <Text style={[st.watchedName, { color: colors.foreground, flexShrink: 1 }]} numberOfLines={1}>
+                        {c.firstName} {c.lastName}
+                      </Text>
+                      {c.identityVerified ? <CustomerIdentityVerifiedBadge size="sm" /> : null}
+                    </View>
                     <View style={[st.riskScorePill, { backgroundColor: risk.color + "18" }]}>
                       <Text style={[st.riskScoreText, { color: risk.color }]}>{risk.emoji} {risk.label}</Text>
                     </View>
@@ -609,7 +450,14 @@ export default function HomeScreen() {
                     <View style={[st.flaggedAvatar, { backgroundColor: colors.error }]}>
                       <Text style={st.flaggedAvatarText}>{c.firstName[0]}{c.lastName[0]}</Text>
                     </View>
-                    <Text style={[st.flaggedName, { color: colors.foreground }]} numberOfLines={1}>{c.firstName} {c.lastName}</Text>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 5, maxWidth: 128 }}>
+                      <Text style={[st.flaggedName, { color: colors.foreground, flexShrink: 1 }]} numberOfLines={1}>
+                        {c.firstName} {c.lastName}
+                      </Text>
+                      {(c as { identityVerified?: boolean }).identityVerified ? (
+                        <CustomerIdentityVerifiedBadge size="sm" />
+                      ) : null}
+                    </View>
                     {!!c.city && <Text style={[st.flaggedCity, { color: colors.muted }]} numberOfLines={1}>{c.city}, {c.state}</Text>}
                     <View style={[st.riskScorePill, { backgroundColor: risk.color + "18" }]}>
                       <Text style={[st.riskScoreText, { color: risk.color }]}>{risk.emoji} {risk.score}/100</Text>
@@ -660,6 +508,7 @@ export default function HomeScreen() {
                 ? `${review.customerFirstName} ${review.customerLastName}`
                 : undefined;
               const custLoc = [review.customerCity, review.customerState].filter(Boolean).join(", ") || undefined;
+              const custVerified = (review as { customerIdentityVerified?: boolean }).customerIdentityVerified;
               return (
                 <Pressable key={review.id} onPress={() => router.push(`/customer/${review.customerId}?from=direct` as never)}>
                   <ReviewCard
@@ -667,6 +516,7 @@ export default function HomeScreen() {
                     showCustomerName
                     customerName={custName}
                     customerLocation={custLoc}
+                    customerIdentityVerified={!!custVerified}
                     onHelpful={() => markHelpful.mutate({ reviewId: review.id })}
                   />
                 </Pressable>
@@ -717,48 +567,40 @@ const st = StyleSheet.create({
     marginBottom: 8,
   },
   heroHeadline: { color: "#fff", fontSize: 28, fontWeight: "900", textAlign: "center", lineHeight: 35, letterSpacing: -0.5 },
-  heroSub: { color: "rgba(255,255,255,0.65)", fontSize: 15, textAlign: "center", lineHeight: 22, marginTop: 10, maxWidth: 340 },
-  landingHint: { color: "rgba(255,255,255,0.5)", fontSize: 13, textAlign: "center", lineHeight: 18 },
-  landingSearchWrap: { width: "100%", maxWidth: 400, marginTop: 20, gap: 10 },
-  landingSearchInput: { backgroundColor: "rgba(255,255,255,0.1)", borderWidth: 1, borderColor: "rgba(255,255,255,0.15)", borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14, color: "#fff", fontSize: 16 },
-  landingSearchBtn: { borderRadius: 14, paddingVertical: 16, alignItems: "center" },
-  landingSearchBtnText: { color: "#fff", fontSize: 18, fontWeight: "800" },
-  autoDropdown: { backgroundColor: "rgba(20,20,25,0.95)", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", borderRadius: 12, overflow: "hidden" },
-  autoListScroll: { maxHeight: 320 },
-  autoRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 12 },
-  autoHint: { color: "rgba(255,255,255,0.4)", fontSize: 13, flex: 1 },
-  autoError: { color: "#fca5a5" },
-  autoItem: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.06)" },
-  autoAvatar: { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center", marginRight: 12 },
-  autoInitials: { color: "#fff", fontSize: 12, fontWeight: "700" },
-  autoItemBody: { flex: 1, minWidth: 0 },
-  autoName: { color: "#fff", fontSize: 14, fontWeight: "600" },
-  autoLoc: { color: "rgba(255,255,255,0.45)", fontSize: 12, marginTop: 1 },
-  autoReviews: { color: "rgba(255,255,255,0.35)", fontSize: 11, marginTop: 2 },
-  autoScoreCol: { alignItems: "flex-end", minWidth: 44, marginLeft: 8 },
-  autoScore: { fontSize: 16, fontWeight: "800" },
-  autoScoreLabel: { fontSize: 9, fontWeight: "600", textTransform: "uppercase" as const, opacity: 0.85 },
-  ctaSub: { color: "rgba(255,255,255,0.4)", fontSize: 12, marginTop: 8, textAlign: "center" },
-  signInActions: { width: "100%", maxWidth: 400, marginTop: 16, gap: 12, alignSelf: "center" },
-  signInPrimaryBtn: {
-    borderRadius: 14,
+  heroSub: { color: "rgba(255,255,255,0.65)", fontSize: 15, textAlign: "center", lineHeight: 22, marginTop: 14, maxWidth: 340 },
+  signInActions: { width: "100%", maxWidth: 400, marginTop: 36, gap: 18, alignSelf: "center" },
+  landingBtnOuter: {
+    borderRadius: 16,
+    width: "100%",
+    overflow: "visible",
+  },
+  landingBtnInner: {
+    borderRadius: 16,
+    overflow: "hidden",
     paddingVertical: 18,
-    paddingHorizontal: 20,
+    paddingHorizontal: 22,
     alignItems: "center",
+    justifyContent: "center",
+    minHeight: 54,
     borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
   },
-  signInPrimaryBtnText: { color: "#fff", fontSize: 17, fontWeight: "800" },
-  signInSecondaryBtn: {
-    borderRadius: 14,
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.08)",
-    borderWidth: 1,
+  signInPrimaryBtnText: {
+    color: "#fff",
+    fontSize: 17,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+    zIndex: 1,
   },
-  signInSecondaryBtnText: { fontSize: 16, fontWeight: "700" },
-  signInHint: { fontSize: 12, textAlign: "center", lineHeight: 17, marginTop: 2 },
-  trustStrip: { flexDirection: "row", gap: 16, marginTop: 28, flexWrap: "wrap", justifyContent: "center" },
+  landingAccountsNote: {
+    color: "rgba(255,255,255,0.45)",
+    fontSize: 12,
+    textAlign: "center",
+    lineHeight: 18,
+    marginTop: 14,
+    paddingHorizontal: 8,
+  },
+  trustStrip: { flexDirection: "row", gap: 16, marginTop: 36, flexWrap: "wrap", justifyContent: "center" },
   trustItem: { alignItems: "center", gap: 4 },
   trustIcon: { fontSize: 22 },
   trustLabel: { color: "rgba(255,255,255,0.6)", fontSize: 11, fontWeight: "600" },

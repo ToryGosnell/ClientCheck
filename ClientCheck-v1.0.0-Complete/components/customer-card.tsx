@@ -5,9 +5,10 @@ import { RiskBadge } from "@/components/risk-badge";
 import { computeRiskScore } from "@/lib/risk-score";
 import type { Customer } from "@/drizzle/schema";
 import type { RiskLevel } from "@/shared/types";
+import { CustomerNameWithVerifiedBadge } from "@/components/customer-identity-verified-badge";
 
 interface CustomerCardProps {
-  customer: Customer;
+  customer: Customer & { identityVerified?: boolean };
   onPress?: () => void;
   compact?: boolean;
 }
@@ -46,9 +47,14 @@ export function CustomerCard({ customer, onPress, compact = false }: CustomerCar
 
       {/* Info */}
       <View style={styles.info}>
-        <Text style={[styles.name, { color: colors.foreground }]} numberOfLines={1}>
-          {customer.firstName} {customer.lastName}
-        </Text>
+        <CustomerNameWithVerifiedBadge
+          firstName={customer.firstName}
+          lastName={customer.lastName}
+          identityVerified={customer.identityVerified}
+          showPreferredByContractorsCopy
+          numberOfLines={1}
+          textStyle={[styles.name, { color: colors.foreground }]}
+        />
 
         {!!(customer.city || customer.state) && (
           <Text style={[styles.location, { color: colors.muted }]} numberOfLines={1}>

@@ -32,11 +32,18 @@ export type EventMap = {
   customer_viewed: { customer_id: number; risk_level: string };
   review_viewed: { review_id: number };
   review_created: { customer_id: number; overall_rating: number };
+  /** Product analytics alias for review submission (beta funnel). */
+  review_submitted: { customer_id: number; overall_rating: number };
   review_helpful_clicked: { review_id: number };
   checkout_started: { plan: string; price: string };
   checkout_completed: { plan: string };
   checkout_cancelled: { plan: string };
-  paywall_shown: { type: "contractor" | "customer" };
+  paywall_shown:
+    | { type: "contractor" }
+    | { type: "customer" }
+    | { type: "verify_customer_identity"; trigger?: string };
+  paywall_dismissed: { surface?: string; trigger?: string };
+  paywall_converted: { trigger?: string };
   license_submitted: undefined;
   license_verified: { success: boolean };
   legal_accepted: undefined;
@@ -58,6 +65,22 @@ export type EventMap = {
   watch_toggled: { customer_id: number; watching: boolean };
   watch_toggled_from_search: { customer_id: number; watching: boolean };
   page_viewed: { screen: string };
+  /** Contractor opened the post-review share sheet (link generated for this customer). */
+  share_link_created: { customer_id: number; referrer_user_id: number };
+  /** Someone opened a shared customer landing URL `/c/:id` (may be unauthenticated). */
+  share_link_clicked: { customer_id: number; referrer_user_id?: number };
+  /** Referrer was stored on the new user after login (server accepted `record-share-referral`). */
+  user_signed_up_from_referral: { referrer_user_id: number };
+  /** Share modal showed weekly contractor view social proof (real count from API). */
+  social_proof_seen: { customer_id: number; weekly_views: number };
+  /** User tapped a share action after seeing non-zero weekly views. */
+  share_clicked_after_social_proof: { customer_id: number; channel: "sms" | "copy" | "facebook" };
+  referral_link_clicked: { surface?: string };
+  referral_signup: { referrer_user_id: number };
+  /** Referral attributed after signup completes (beta funnel). */
+  referral_signup_completed: { referrer_user_id: number; source: "share_link" | "contractor_invite" };
+  referral_verified: { referrer_user_id: number; referred_user_id: number };
+  reward_earned: { free_months: number; source?: string };
 };
 
 export type EventName = keyof EventMap;

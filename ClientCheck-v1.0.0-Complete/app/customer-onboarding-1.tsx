@@ -3,6 +3,11 @@ import { ScrollView, View, Text, Pressable } from "react-native";
 import { ScreenContainer } from "@/components/screen-container";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
+import {
+  CUSTOMER_NO_SUBSCRIPTION_REQUIRED_LINE,
+  CUSTOMER_OPTIONAL_MONITORING_LABEL,
+  CUSTOMER_PAY_PER_DISPUTE_LABEL,
+} from "@/shared/billing-config";
 
 export default function CustomerOnboarding1Screen() {
   const router = useRouter();
@@ -41,18 +46,19 @@ export default function CustomerOnboarding1Screen() {
 
             <View className="gap-4">
               <View className="gap-2">
-                <Text className="text-base font-semibold text-foreground">💰 Fair Pricing</Text>
+                <Text className="text-base font-semibold text-foreground">💰 Fair pricing</Text>
+                <Text className="text-sm text-muted">{CUSTOMER_NO_SUBSCRIPTION_REQUIRED_LINE}</Text>
                 <Text className="text-sm text-muted">
-                  You pay the same as contractors: $120/year. No surprises, no
-                  special treatment.
+                  {CUSTOMER_PAY_PER_DISPUTE_LABEL} when you need it, plus an {CUSTOMER_OPTIONAL_MONITORING_LABEL.toLowerCase()}{" "}
+                  if you want ongoing tools.
                 </Text>
               </View>
 
               <View className="gap-2">
-                <Text className="text-base font-semibold text-foreground">✅ Honest Reviews</Text>
+                <Text className="text-base font-semibold text-foreground">✅ Honest reviews</Text>
                 <Text className="text-sm text-muted">
-                  Because everyone pays, fake reviews and frivolous disputes are rare. You're
-                  paying for quality feedback.
+                  Contractor Pro and optional customer fees help keep the platform sustainable, which supports
+                  credible feedback and fair moderation.
                 </Text>
               </View>
 

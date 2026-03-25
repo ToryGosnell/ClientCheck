@@ -11,6 +11,7 @@
 
 import {
   CONTRACTOR_ANNUAL_PRICE_CENTS,
+  CONTRACTOR_PRO_MONTHLY_PRICE_CENTS,
   CUSTOMER_MONTHLY_PRICE_CENTS,
 } from "@/shared/billing-config";
 
@@ -79,14 +80,29 @@ export class StripePaymentHandler {
         amountCents: CONTRACTOR_ANNUAL_PRICE_CENTS,
         amount: CONTRACTOR_ANNUAL_PRICE_CENTS / 100,
         interval: "year",
-        displayName: "Annual Plan ($100.00/year)",
+        displayName: `Annual Plan ($${(CONTRACTOR_ANNUAL_PRICE_CENTS / 100).toFixed(2)}/year)`,
       };
     }
     return {
       amountCents: CUSTOMER_MONTHLY_PRICE_CENTS,
       amount: CUSTOMER_MONTHLY_PRICE_CENTS / 100,
       interval: "month",
-      displayName: "Monthly Plan ($9.99/month)",
+      displayName: `Monthly Plan ($${(CUSTOMER_MONTHLY_PRICE_CENTS / 100).toFixed(2)}/month)`,
+    };
+  }
+
+  /** Contractor Pro monthly ($19) — use when building contractor checkout outside customer identity flow. */
+  static getContractorProMonthlyDetails(): {
+    amountCents: number;
+    amount: number;
+    interval: string;
+    displayName: string;
+  } {
+    return {
+      amountCents: CONTRACTOR_PRO_MONTHLY_PRICE_CENTS,
+      amount: CONTRACTOR_PRO_MONTHLY_PRICE_CENTS / 100,
+      interval: "month",
+      displayName: `Contractor Pro ($${(CONTRACTOR_PRO_MONTHLY_PRICE_CENTS / 100).toFixed(2)}/month)`,
     };
   }
 }

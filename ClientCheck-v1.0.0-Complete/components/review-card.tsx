@@ -22,6 +22,7 @@ import {
   isContractorVerificationBadge,
   meetsVerifiedReportCriteria,
 } from "@/shared/trust-labels";
+import { CustomerIdentityVerifiedBadge } from "@/components/customer-identity-verified-badge";
 
 const MAX_PREVIEW_CHARS = 280;
 
@@ -46,6 +47,8 @@ interface ReviewCardProps {
   disputeSubmitted?: boolean;
   /** Customer posted a public response (optional; omit if unknown). */
   hasCustomerResponse?: boolean;
+  /** Customer directory email matches a verified customer account. */
+  customerIdentityVerified?: boolean;
 }
 
 export function ReviewCard({
@@ -60,6 +63,7 @@ export function ReviewCard({
   isContractorVerified = false,
   disputeSubmitted = false,
   hasCustomerResponse = false,
+  customerIdentityVerified = false,
 }: ReviewCardProps) {
   const colors = useColors();
   const { redFlags, greenFlags } = parseFlags(review.redFlags);
@@ -109,7 +113,10 @@ export function ReviewCard({
         <View style={styles.customerHeader}>
           <View style={styles.customerHeaderLeft}>
             <Text style={[styles.reviewForLabel, { color: colors.muted }]}>Reviewed for:</Text>
-            <Text style={[styles.customerName, { color: colors.foreground }]}>{customerName}</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <Text style={[styles.customerName, { color: colors.foreground }]}>{customerName}</Text>
+              {customerIdentityVerified ? <CustomerIdentityVerifiedBadge size="sm" /> : null}
+            </View>
             {!!customerLocation && (
               <Text style={[styles.customerLocation, { color: colors.muted }]}>📍 {customerLocation}</Text>
             )}

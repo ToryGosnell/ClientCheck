@@ -208,9 +208,11 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {/* Subscription Section */}
+        {/* Subscription / billing */}
         <View>
-          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Subscription</Text>
+          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
+            {user?.role === "customer" ? "Billing" : "Subscription"}
+          </Text>
 
           <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Pressable
@@ -218,34 +220,38 @@ export default function SettingsScreen() {
               style={({ pressed }) => [styles.settingRow, pressed && { opacity: 0.6 }]}
             >
               <Text style={[styles.settingLabel, { color: colors.foreground }]}>
-                Manage Subscription
+                {user?.role === "customer" ? "Billing & optional upgrades" : "Manage Subscription"}
               </Text>
               <Text style={[styles.settingValue, { color: colors.muted }]}>›</Text>
             </Pressable>
 
-            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+            {user?.role !== "customer" ? (
+              <>
+                <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
-            <Pressable
-              onPress={() => setShowCancelModal(true)}
-              style={({ pressed }) => [styles.settingRow, pressed && { opacity: 0.6 }]}
-            >
-              <Text style={[styles.settingLabel, { color: colors.error }]}>
-                Cancel Subscription
-              </Text>
-              <Text style={[styles.settingValue, { color: colors.error }]}>›</Text>
-            </Pressable>
+                <Pressable
+                  onPress={() => setShowCancelModal(true)}
+                  style={({ pressed }) => [styles.settingRow, pressed && { opacity: 0.6 }]}
+                >
+                  <Text style={[styles.settingLabel, { color: colors.error }]}>
+                    Cancel Subscription
+                  </Text>
+                  <Text style={[styles.settingValue, { color: colors.error }]}>›</Text>
+                </Pressable>
 
-            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+                <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
-            <Pressable
-              onPress={() => router.push("/subscription-reactivate")}
-              style={({ pressed }) => [styles.settingRow, pressed && { opacity: 0.6 }]}
-            >
-              <Text style={[styles.settingLabel, { color: colors.primary }]}>
-                Reactivate Subscription
-              </Text>
-              <Text style={[styles.settingValue, { color: colors.primary }]}>›</Text>
-            </Pressable>
+                <Pressable
+                  onPress={() => router.push("/subscription-reactivate")}
+                  style={({ pressed }) => [styles.settingRow, pressed && { opacity: 0.6 }]}
+                >
+                  <Text style={[styles.settingLabel, { color: colors.primary }]}>
+                    Reactivate Subscription
+                  </Text>
+                  <Text style={[styles.settingValue, { color: colors.primary }]}>›</Text>
+                </Pressable>
+              </>
+            ) : null}
           </View>
         </View>
 

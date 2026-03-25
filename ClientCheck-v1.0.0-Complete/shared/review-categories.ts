@@ -33,7 +33,18 @@ export type WouldWorkAgainValue = "yes" | "no" | "na";
 
 export type ReviewCategoryRatings = Record<ReviewCategoryKey, ReviewCategoryValue>;
 
+/** One star row: 1–5, or `null` = N/A (digit-picker UIs). */
+export type ReviewCategoryDigit = 1 | 2 | 3 | 4 | 5 | null;
+
+/**
+ * All categories as digits or null. Key names match `REVIEW_CATEGORY_KEYS` (not aliases):
+ * `decisionMaking` (not decisionMakingSpeed), `jobsiteConditions` (not jobsitePreparedness),
+ * `interference` (not interferenceWithWork).
+ */
+export type ReviewRatings = Record<ReviewCategoryKey, ReviewCategoryDigit>;
+
 export type ContractorClientReviewRatings = {
+  /** Null when no computable overall (e.g. no scored categories); 0 when would-not-work-again. */
   overallRating: number | null;
   categories: ReviewCategoryRatings;
   wouldWorkAgain: WouldWorkAgainValue;
@@ -146,11 +157,54 @@ export function emptyCategoryRatings(): ReviewCategoryRatings {
   ) as ReviewCategoryRatings;
 }
 
+/** Initial state for digit + N/A selectors (`null` = N/A / not yet chosen — see `digitRatingsToCategoryRatings`). */
+export function emptyReviewRatings(): ReviewRatings {
+  return Object.fromEntries(
+    REVIEW_CATEGORY_KEYS.map((k) => [k, null]),
+  ) as ReviewRatings;
+}
+
+/**
+ * For submit/scoring: `null` → N/A; 1–5 → scored.
+ * If you need “unset” vs N/A, use `ReviewCategoryRatings` / stars UI instead.
+ */
+export function digitRatingsToCategoryRatings(d: ReviewRatings): ReviewCategoryRatings {
+  return Object.fromEntries(
+    REVIEW_CATEGORY_KEYS.map((key) => {
+      const v = d[key];
+      if (v === null) return [key, { score: null, notApplicable: true }];
+      return [key, { score: v, notApplicable: false }];
+    }),
+  ) as ReviewCategoryRatings;
+}
+
+export function categoryRatingsToDigitRatings(c: ReviewCategoryRatings): ReviewRatings {
+  return Object.fromEntries(
+    REVIEW_CATEGORY_KEYS.map((key) => {
+      const v = c[key];
+      if (v.notApplicable || v.score == null) return [key, null];
+      const s = v.score;
+      if (s >= 1 && s <= 5) return [key, s as 1 | 2 | 3 | 4 | 5];
+      return [key, null];
+    }),
+  ) as ReviewRatings;
+}
+
 export function naCategory(): ReviewCategoryValue {
   return { score: null, notApplicable: true };
 }
 
 // ─── Scoring ──────────────────────────────────────────────────────────────────
+
+/**
+ * Unweighted mean of 1–5 scores; drops null, undefined, and out-of-range values.
+ * For category weights and N/A handling use {@link getCalculatedOverallRating}.
+ */
+export function computeAverageFromRatings(values: Array<number | null | undefined>): number | null {
+  const valid = values.filter((v): v is number => typeof v === "number" && v >= 1 && v <= 5);
+  if (!valid.length) return null;
+  return valid.reduce((sum, v) => sum + v, 0) / valid.length;
+}
 
 /**
  * Raw weighted average from category scores (1-5 scale).
@@ -192,16 +246,16 @@ export function getAdjustedOverallRating(
 /**
  * Final published overall rating after flag adjustments and override rule:
  *   - If wouldWorkAgain === "no" → 0
- *   - Otherwise → category average + flag adjustments, clamped 0-5
+ *   - Otherwise → category average + flag adjustments, clamped 0–5, or `null` if nothing to average
  */
 export function getFinalOverallRating(
   categories: ReviewCategoryRatings,
   wouldWorkAgain: WouldWorkAgainValue,
   redFlags: string[] = [],
   greenFlags: string[] = [],
-): number {
+): number | null {
   if (wouldWorkAgain === "no") return 0;
-  return getAdjustedOverallRating(categories, redFlags, greenFlags) ?? 0;
+  return getAdjustedOverallRating(categories, redFlags, greenFlags);
 }
 
 /**
@@ -242,7 +296,7 @@ export function getStarColorByPosition(
 /**
  * Compute a 0-100 client score from category values (for weighted scoring).
  */
-export function computeClientScore100(categories: ReviewCategoryRatings): number {
+export function computeClientScore100(categories: ReviewCategoryRatings): number | null {
   let totalWeightedScore = 0;
   let totalWeight = 0;
 
@@ -254,7 +308,7 @@ export function computeClientScore100(categories: ReviewCategoryRatings): number
     totalWeight += meta.weight;
   }
 
-  if (totalWeight === 0) return 0;
+  if (totalWeight === 0) return null;
   return Math.round(totalWeightedScore / (totalWeight / 100));
 }
 
@@ -298,11 +352,13 @@ export function validateReviewRatings(
 ): ReviewValidationError[] {
   const errors: ReviewValidationError[] = [];
 
-  // overallRating is now auto-calculated; 0 is valid when wouldWorkAgain === "no"
-  if (ratings.overallRating == null) {
-    errors.push({ field: "overallRating", message: "Rate at least one category to generate an overall rating." });
-  } else if (ratings.wouldWorkAgain !== "no" && (ratings.overallRating < 1 || ratings.overallRating > 5)) {
-    errors.push({ field: "overallRating", message: "Rate at least one category to generate an overall rating." });
+  if (ratings.wouldWorkAgain === "no") {
+    // Overall is forced to 0 in UI — allow without re-checking range
+  } else if (ratings.overallRating == null || ratings.overallRating < 1 || ratings.overallRating > 5) {
+    errors.push({
+      field: "overallRating",
+      message: "Rate at least one category to generate an overall rating.",
+    });
   }
 
   for (const meta of REVIEW_CATEGORIES) {
@@ -424,16 +480,28 @@ export function legacyToWouldWorkAgain(row: Record<string, unknown>): WouldWorkA
  * Convert new `ReviewCategoryRatings` into the flat old DB column format
  * for backward-compatible inserts / denormalized storage.
  */
-export function categoriesToLegacyFlat(
-  categories: ReviewCategoryRatings,
-): Record<string, number> {
+/** Legacy DB columns: `null` when N/A or unset — never substitute 0. */
+export function categoriesToLegacyFlat(categories: ReviewCategoryRatings): {
+  ratingPaymentReliability: number | null;
+  ratingCommunication: number | null;
+  ratingScopeChanges: number | null;
+  ratingPropertyRespect: number | null;
+  ratingPermitPulling: number | null;
+  ratingOverallJobExperience: number | null;
+} {
+  const cell = (cat: ReviewCategoryValue | undefined): number | null => {
+    if (!cat || cat.notApplicable || cat.score == null) return null;
+    const s = cat.score;
+    return s >= 1 && s <= 5 ? s : null;
+  };
+
   return {
-    ratingPaymentReliability: categories.paymentReliability?.score ?? 0,
-    ratingCommunication: categories.communication?.score ?? 0,
-    ratingScopeChanges: categories.scopeChanges?.score ?? 0,
-    ratingPropertyRespect: categories.respectProfessionalism?.score ?? 0,
-    ratingPermitPulling: categories.contractCompliance?.score ?? 0,
-    ratingOverallJobExperience: categories.overallExperience?.score ?? 0,
+    ratingPaymentReliability: cell(categories.paymentReliability),
+    ratingCommunication: cell(categories.communication),
+    ratingScopeChanges: cell(categories.scopeChanges),
+    ratingPropertyRespect: cell(categories.respectProfessionalism),
+    ratingPermitPulling: cell(categories.contractCompliance),
+    ratingOverallJobExperience: cell(categories.overallExperience),
   };
 }
 

@@ -19,12 +19,32 @@ export const users = mysqlTable("users", {
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
   role: mysqlEnum("role", ["user", "admin", "contractor", "customer"]).default("user").notNull(),
+  /** Set when the user closes their account (soft delete). Row is retained for FK integrity. */
+  deletedAt: timestamp("deletedAt"),
+  accountStatus: mysqlEnum("accountStatus", ["active", "deleted", "suspended"])
+    .default("active")
+    .notNull(),
   termsAcceptedAt: timestamp("termsAcceptedAt"),
   privacyAcceptedAt: timestamp("privacyAcceptedAt"),
   legalAcceptanceVersion: varchar("legalAcceptanceVersion", { length: 32 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
+  /** Customer identity verification completed (Stripe Checkout, metadata.type=identity_verification). */
+  isVerified: boolean("isVerified").default(false).notNull(),
+  /** When verification completed; MySQL DATETIME / nullable. */
+  verifiedAt: timestamp("verifiedAt"),
+  /** Set once: numeric app user id of the contractor who shared a customer profile link this user followed (growth / referrals). */
+  referredByUserId: int("referredByUserId"),
+  /** Contractors who used this user's /invite link (signup attributed). */
+  referralCount: int("referralCount").default(0).notNull(),
+  /** Subset of referralCount that completed contractor verification. */
+  verifiedReferralCount: int("verifiedReferralCount").default(0).notNull(),
+  freeMonthsEarned: int("freeMonthsEarned").default(0).notNull(),
+  /** Stacked referral reward extension end (subscription access). */
+  subscriptionExtendedUntil: timestamp("subscriptionExtendedUntil"),
+  /** True until the user dismisses the in-app reward celebration. */
+  referralRewardUnseen: boolean("referralRewardUnseen").default(false).notNull(),
 });
 
 export type User = typeof users.$inferSelect;
@@ -98,7 +118,13 @@ export const customers = mysqlTable("customers", {
   ratingOverallJobExperience: decimal("ratingOverallJobExperience", { precision: 3, scale: 2 }).default("0.00"),
   // Risk level computed from overallRating
   riskLevel: mysqlEnum("riskLevel", ["low", "medium", "high", "unknown"]).default("unknown").notNull(),
-  createdByUserId: int("createdByUserId").notNull(),
+  /**
+   * Incremented when an authenticated contractor opens this directory profile (conversion / insights).
+   * Used for customer-side verification paywall triggers, not for public analytics alone.
+   */
+  contractorProfileViewCount: int("contractorProfileViewCount").default(0).notNull(),
+  /** Nullable so a hard-deleted creator user does not remove the customer row (FK ON DELETE SET NULL in DB). */
+  createdByUserId: int("createdByUserId"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -107,23 +133,52 @@ export type Customer = typeof customers.$inferSelect;
 export type InsertCustomer = typeof customers.$inferInsert;
 
 /**
+ * Contractor invite program (/invite?ref=) — one row per referred contractor signup.
+ */
+export const contractorInviteReferrals = mysqlTable("contractor_invite_referrals", {
+  id: int("id").autoincrement().primaryKey(),
+  referrerId: int("referrerId").notNull(),
+  referredUserId: int("referredUserId").notNull().unique(),
+  isVerified: boolean("isVerified").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type ContractorInviteReferral = typeof contractorInviteReferrals.$inferSelect;
+export type InsertContractorInviteReferral = typeof contractorInviteReferrals.$inferInsert;
+
+/**
+ * Per-user contractor opens of a customer directory profile (for weekly social proof / analytics).
+ */
+export const customerProfileViews = mysqlTable("customer_profile_views", {
+  id: int("id").autoincrement().primaryKey(),
+  customerId: int("customerId").notNull(),
+  userId: int("userId").notNull(),
+  viewedAt: timestamp("viewedAt").defaultNow().notNull(),
+});
+
+export type CustomerProfileView = typeof customerProfileViews.$inferSelect;
+export type InsertCustomerProfileView = typeof customerProfileViews.$inferInsert;
+
+/**
  * Reviews — a contractor's rating and review of a customer.
  */
 export const reviews = mysqlTable("reviews", {
   id: int("id").autoincrement().primaryKey(),
   customerId: int("customerId").notNull(),
-  contractorUserId: int("contractorUserId").notNull(),
+  /** Nullable for FK ON DELETE SET NULL if a user row is ever hard-deleted; soft-deleted contractors keep their id. */
+  contractorUserId: int("contractorUserId"),
   // Final published overall rating (0 when wouldWorkAgain=no, otherwise calculated average)
   overallRating: int("overallRating").notNull(),
   // Raw category average before override (for analytics)
   calculatedOverallRating: decimal("calculatedOverallRating", { precision: 3, scale: 2 }),
   // Category ratings 1–5 (new consolidated categories)
-  ratingPaymentReliability: int("ratingPaymentReliability").notNull(),
-  ratingCommunication: int("ratingCommunication").notNull(),
-  ratingScopeChanges: int("ratingScopeChanges").notNull(),
-  ratingPropertyRespect: int("ratingPropertyRespect").notNull(),
-  ratingPermitPulling: int("ratingPermitPulling").notNull(),
-  ratingOverallJobExperience: int("ratingOverallJobExperience").notNull(),
+  /** 1–5 when rated; NULL when category marked N/A */
+  ratingPaymentReliability: int("ratingPaymentReliability"),
+  ratingCommunication: int("ratingCommunication"),
+  ratingScopeChanges: int("ratingScopeChanges"),
+  ratingPropertyRespect: int("ratingPropertyRespect"),
+  ratingPermitPulling: int("ratingPermitPulling"),
+  ratingOverallJobExperience: int("ratingOverallJobExperience"),
   // New: normalized categories + wouldWorkAgain stored as JSON (coexists with legacy int cols)
   categoryDataJson: text("categoryDataJson"),
   wouldWorkAgain: varchar("wouldWorkAgain", { length: 3 }),
@@ -172,6 +227,7 @@ export const subscriptions = mysqlTable("subscriptions", {
   planType: mysqlEnum("planType", [
     "verified_contractor_free_year",
     "contractor_annual",
+    "contractor_pro_monthly",
     "customer_monthly",
     "annual_paid",
     "none",

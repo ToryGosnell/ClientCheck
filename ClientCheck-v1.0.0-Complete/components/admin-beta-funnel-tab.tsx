@@ -195,7 +195,7 @@ function MetricCard({
   label: string;
   value: string;
   hint: string;
-  colors: { foreground: string; primary: string };
+  colors: any;
 }) {
   return (
     <View style={[styles.metricCard, { borderColor: BORDER, backgroundColor: SURFACE }]}>

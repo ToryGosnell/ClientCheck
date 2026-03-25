@@ -7,6 +7,11 @@ import { ScrollView, Text, View, TouchableOpacity, Image } from "react-native";
 import { useRouter } from "expo-router";
 import { ScreenContainer } from "@/components/screen-container";
 import { ScreenBackground } from "@/components/screen-background";
+import {
+  CONTRACTOR_PRO_ANNUAL_PRICE_DISPLAY,
+  CONTRACTOR_PRO_MONTHLY_PRICE_DISPLAY,
+  CUSTOMER_NO_SUBSCRIPTION_REQUIRED_LINE,
+} from "@/shared/billing-config";
 
 export default function WelcomeScreen() {
   const router = useRouter();
@@ -24,8 +29,8 @@ export default function WelcomeScreen() {
     },
     {
       icon: "🛡️",
-      title: "Fair & Verified",
-      description: "Both contractors and customers pay to ensure honest reviews",
+      title: "Fair & verified",
+      description: "Customers can view and respond for free; contractor Pro powers risk intelligence",
     },
     {
       icon: "💬",
@@ -83,16 +88,16 @@ export default function WelcomeScreen() {
 
             <View className="bg-surface rounded-xl p-5 border border-border gap-3">
               <View className="flex-row items-baseline gap-2">
-                <Text className="text-3xl font-bold text-primary">12 months free</Text>
+                <Text className="text-3xl font-bold text-primary">Contractor free tier</Text>
               </View>
               <Text className="text-sm text-foreground leading-relaxed">
-                Verified contractors get 12 months of full access at no cost.
+                Start with limited searches. Upgrade to Pro for unlimited search, risk scores, red flags, and alerts (
+                {CONTRACTOR_PRO_MONTHLY_PRICE_DISPLAY}/mo or {CONTRACTOR_PRO_ANNUAL_PRICE_DISPLAY}/yr).
               </Text>
+              <Text className="text-sm text-muted leading-relaxed">{CUSTOMER_NO_SUBSCRIPTION_REQUIRED_LINE}</Text>
               <View className="gap-2 mt-1">
-                <Text className="text-xs text-muted">✓ Valid contractor license number required</Text>
-                <Text className="text-xs text-muted">✓ After the free period, membership renews at $120.00/year</Text>
-                <Text className="text-xs text-muted">✓ You'll be reminded 3 days before your free period ends</Text>
-                <Text className="text-xs text-muted">✓ No credit card required to start</Text>
+                <Text className="text-xs text-muted">✓ Valid contractor license number may be required to verify</Text>
+                <Text className="text-xs text-muted">✓ No credit card required to start the free tier</Text>
               </View>
             </View>
           </View>
@@ -117,7 +122,7 @@ export default function WelcomeScreen() {
           {/* Trust Indicators */}
           <View className="gap-2 mt-6 pt-6 border-t border-border">
             <View className="flex-row items-center justify-center gap-2">
-              <Text className="text-sm text-muted">✓ 12 months free for verified contractors</Text>
+              <Text className="text-sm text-muted">✓ Contractor free tier, then optional Pro</Text>
             </View>
             <View className="flex-row items-center justify-center gap-2">
               <Text className="text-sm text-muted">✓ Verified reviews from real contractors</Text>

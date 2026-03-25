@@ -1,9 +1,10 @@
+import { randomUUID } from "crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { COOKIE_NAME } from "../shared/const.js";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
+import { adminProcedure, protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import * as db from "./db";
 import * as subDb from "./subscription-db";
 import * as stripeService from "./stripe-service";
@@ -20,11 +21,40 @@ import * as notificationDelivery from "./services/notification-delivery-service"
 import { calculateCustomerRiskScore, saveRiskScore } from "./services/risk-score-engine";
 import { FraudDetectionService } from "../lib/fraud-detection-service";
 import { getDb } from "./db";
-import { reviews as reviewsTable, reviewModerations, customerResponses, reviewFlagRequests, disputeTimeline, reviewDisputes } from "../drizzle/schema";
+import {
+  reviews as reviewsTable,
+  reviewModerations,
+  customerResponses,
+  reviewFlagRequests,
+  disputeTimeline,
+  reviewDisputes,
+  users,
+} from "../drizzle/schema";
 import * as integrationImportService from "./services/integration-import-service";
 import * as fraudSignalsService from "./services/fraud-signals-service";
 import { desc as drizzleDesc, eq, inArray } from "drizzle-orm";
 import { adminRouter } from "./admin-router";
+import * as contractorInviteReferral from "./contractor-invite-referral-service";
+import { isAdmin, isContractor } from "../shared/roles";
+
+/**
+ * Core customer flows (profile, responses, disputes) never require Stripe.
+ * Contractor roles (`contractor`, `user`) need an active trial or paid plan for platform tools.
+ */
+async function requireContractorSubscriptionForPlatformTools(ctx: {
+  user: { id: number; openId: string; role: string };
+}) {
+  const role = ctx.user.role;
+  if (role === "customer" || role === "admin") return;
+  const s = await subDb.checkSubscriptionStatus(ctx.user.id, ctx.user.openId);
+  if (!s.isActive) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Contractor subscription or an active trial is required for this action. Upgrade from Billing or complete verification.",
+    });
+  }
+}
 
 export const appRouter = router({
   system: systemRouter,
@@ -55,6 +85,77 @@ export const appRouter = router({
         })
       )
       .mutation(({ ctx, input }) => db.upsertContractorProfile(ctx.user.id, input)),
+
+    /**
+     * Soft-delete contractor account: user row + profile PII cleared; customers and reviews are NOT removed.
+     * Stripe subscription is cancelled when present. Client should clear session after success.
+     */
+    softDeleteAccount: protectedProcedure
+      .input(z.object({ confirm: z.literal("DELETE_MY_ACCOUNT") }))
+      .mutation(async ({ ctx }) => {
+        const role = ctx.user.role;
+        if (role === "admin") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Admin accounts cannot be closed through this action." });
+        }
+        if (role === "customer") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Customer account closure uses a different process. Contact support.",
+          });
+        }
+        const userId = ctx.user.id;
+        try {
+          const sub = await subDb.getSubscription(userId);
+          if (sub?.stripeSubscriptionId) {
+            await stripePayment.cancelSubscription(sub.stripeSubscriptionId);
+          }
+        } catch (e) {
+          console.warn("[softDeleteAccount] Stripe cancel failed (continuing with DB soft-delete):", e);
+        }
+        await subDb.cancelSubscription(userId);
+        await db.softDeleteContractorUser(userId);
+        return { ok: true as const };
+      }),
+
+    /** Contractor invite program stats (/invite?ref=). */
+    getReferralStats: protectedProcedure.query(async ({ ctx }) => {
+      if (!isContractor(ctx.user) && !isAdmin(ctx.user)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only contractors can view referral rewards." });
+      }
+      const dash = await contractorInviteReferral.getContractorReferralDashboard(ctx.user.id);
+      if (!dash) return null;
+      return {
+        referralCount: dash.referralCount,
+        verifiedReferralCount: dash.verifiedReferralCount,
+        freeMonthsEarned: dash.freeMonthsEarned,
+        nextReferralsUntilReward: dash.nextReferralsUntilReward,
+        referralRewardUnseen: dash.referralRewardUnseen,
+        subscriptionExtendedUntil: dash.subscriptionExtendedUntil?.toISOString() ?? null,
+      };
+    }),
+
+    dismissReferralReward: protectedProcedure.mutation(async ({ ctx }) => {
+      if (!isContractor(ctx.user) && !isAdmin(ctx.user)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only contractors can dismiss this prompt." });
+      }
+      await contractorInviteReferral.clearReferralRewardUnseen(ctx.user.id);
+      return { ok: true as const };
+    }),
+
+    /** Top referrers by verified count (read-only; does not affect rewards). */
+    getReferralLeaderboardPreview: protectedProcedure.query(async ({ ctx }) => {
+      if (!isContractor(ctx.user) && !isAdmin(ctx.user)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only contractors can view the referral leaderboard." });
+      }
+      const rows = await contractorInviteReferral.getContractorReferralLeaderboardPreview(3);
+      return {
+        entries: rows.map((r, i) => ({
+          rank: i + 1,
+          displayName: r.displayName,
+          verifiedCount: r.verifiedReferralCount,
+        })),
+      };
+    }),
   }),
 
   // ─── Customers ──────────────────────────────────────────────────────────────
@@ -88,7 +189,10 @@ export const appRouter = router({
         state: z.string().optional(),
         zip: z.string().optional(),
       }))
-      .query(({ input }) => db.findPotentialCustomerMatches(input)),
+      .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
+        return db.findPotentialCustomerMatches(input);
+      }),
     
     // Public access to view all reviews for a customer (no login required)
     getReviews: publicProcedure
@@ -99,14 +203,41 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .query(({ input }) => db.getCustomerById(input.id)),
 
+    /** Customer-only: directory row + risk engine snapshot for verification paywall triggers. */
+    getMyDirectoryInsights: protectedProcedure.query(async ({ ctx }) => {
+      if (ctx.user.role !== "customer") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only customer accounts can load directory insights." });
+      }
+      return db.getDirectoryCustomerInsightsForUser(ctx.user.id);
+    }),
+
+    /**
+     * Contractor-only: count authenticated opens of a directory profile (conversion signals).
+     * Does not block the UI if it fails.
+     */
+    recordContractorProfileView: protectedProcedure
+      .input(z.object({ customerId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
+        if (ctx.user.role === "customer") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Only contractors can record profile views." });
+        }
+        const next = await db.incrementCustomerContractorProfileViews(input.customerId, ctx.user.id);
+        if (next == null) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Customer not found." });
+        }
+        return { ok: true as const, contractorProfileViewCount: next };
+      }),
+
     getScore: publicProcedure
       .input(z.object({ customerId: z.number() }))
       .query(async ({ input }) => {
         const { computeCustomerScore } = await import("../shared/customer-score");
         const reviewData = await db.getReviewsForCustomer(input.customerId);
         const allReviews = (reviewData?.reviews ?? []).map((r: any) => ({
-          overallRating: r.overallRating ?? 0,
-          ratingPaymentReliability: r.ratingPaymentReliability ?? 3,
+          overallRating: typeof r.overallRating === "number" ? r.overallRating : 0,
+          ratingPaymentReliability:
+            typeof r.ratingPaymentReliability === "number" ? r.ratingPaymentReliability : null,
           createdAt: r.createdAt ?? new Date().toISOString(),
           redFlags: r.redFlags ?? null,
         }));
@@ -147,8 +278,9 @@ export const appRouter = router({
         }
         const { computeCustomerScore } = await import("../shared/customer-score");
         const allReviews = reviews.map((r: any) => ({
-          overallRating: r.overallRating ?? 0,
-          ratingPaymentReliability: r.ratingPaymentReliability ?? 3,
+          overallRating: typeof r.overallRating === "number" ? r.overallRating : 0,
+          ratingPaymentReliability:
+            typeof r.ratingPaymentReliability === "number" ? r.ratingPaymentReliability : null,
           createdAt: r.createdAt ?? new Date().toISOString(),
           redFlags: r.redFlags ?? null,
         }));
@@ -185,10 +317,15 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
+        const rawPhone = (input.phone ?? "").trim();
+        // Empty phone would violate UNIQUE(phone) on second row (MySQL treats '' as one value).
+        const phone =
+          rawPhone.length > 0 ? rawPhone : `pending-${ctx.user.id}-${randomUUID()}`;
         const customerData = {
           firstName: input.firstName,
           lastName: input.lastName,
-          phone: input.phone || "",
+          phone,
           email: input.email,
           address: input.address || "",
           city: input.city || "",
@@ -232,10 +369,19 @@ export const appRouter = router({
 
     recomputeAggregates: protectedProcedure
       .input(z.object({ customerId: z.number() }))
-      .mutation(({ input }) => db.recomputeCustomerAggregates(input.customerId)),
+      .mutation(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
+        return db.recomputeCustomerAggregates(input.customerId);
+      }),
 
-    getFlagged: protectedProcedure.query(() => db.getRecentlyFlaggedCustomers(20)),
-    getTopRated: protectedProcedure.query(() => db.getTopRatedCustomers(10)),
+    getFlagged: protectedProcedure.query(async ({ ctx }) => {
+      await requireContractorSubscriptionForPlatformTools(ctx);
+      return db.getRecentlyFlaggedCustomers(20);
+    }),
+    getTopRated: protectedProcedure.query(async ({ ctx }) => {
+      await requireContractorSubscriptionForPlatformTools(ctx);
+      return db.getTopRatedCustomers(10);
+    }),
   }),
 
   // ─── Subscriptions ────────────────────────────────────────────────────────────
@@ -256,9 +402,89 @@ export const appRouter = router({
     ),
 
     getMembership: protectedProcedure.query(async ({ ctx }) => {
-      const { computeFreeYearDates, getDaysRemaining } = await import("@/shared/membership");
+      const { getDaysRemaining } = await import("@/shared/membership");
+
+      if (ctx.user.role === "admin") {
+        const far = new Date();
+        far.setFullYear(far.getFullYear() + 10);
+        return {
+          verificationStatus: "verified" as const,
+          contractorLicenseNumber: null,
+          planType: "annual_paid" as const,
+          freeTrialStartAt: null,
+          freeTrialEndAt: null,
+          nextBillingAmount: null,
+          nextBillingDate: null,
+          paymentMethodOnFile: false,
+          renewalReminderSentAt: null,
+          daysRemaining: 3650,
+          subscriptionEndsAt: far.toISOString(),
+          lastReminderDaysMilestone: null,
+          stripeCustomerId: null,
+          stripeSubscriptionId: null,
+          membershipStatus: "paid_active" as const,
+        };
+      }
+
       const profile = await db.getContractorProfile(ctx.user.id);
       const sub = await subDb.getSubscription?.(ctx.user.id).catch(() => null);
+
+      if (ctx.user.role === "customer") {
+        const now = new Date();
+        const pt = (sub as { planType?: string })?.planType;
+        const database = await getDb();
+        let identityVerifiedUser = false;
+        let userVerifiedAtIso: string | null = null;
+        if (database) {
+          const [urow] = await database
+            .select({ isVerified: users.isVerified, verifiedAt: users.verifiedAt })
+            .from(users)
+            .where(eq(users.id, ctx.user.id))
+            .limit(1);
+          identityVerifiedUser = !!urow?.isVerified;
+          userVerifiedAtIso = urow?.verifiedAt?.toISOString?.() ?? null;
+        }
+        const paidSub =
+          !!sub &&
+          pt === "customer_monthly" &&
+          ((sub as { status?: string }).status === "active" ||
+            (sub as { status?: string }).status === "trial") &&
+          (sub as { subscriptionEndsAt?: Date }).subscriptionEndsAt &&
+          new Date((sub as { subscriptionEndsAt: Date }).subscriptionEndsAt) > now;
+        const paid = paidSub || identityVerifiedUser;
+        const displayPlan = paid ? ("customer_identity_verification" as const) : ("free_customer" as const);
+        return {
+          verificationStatus: "not_submitted" as const,
+          contractorLicenseNumber: null,
+          planType: displayPlan,
+          freeTrialStartAt: null,
+          freeTrialEndAt: null,
+          nextBillingAmount:
+            paidSub && (sub as { nextBillingAmount?: unknown }).nextBillingAmount != null
+              ? Number((sub as { nextBillingAmount: string }).nextBillingAmount)
+              : null,
+          nextBillingDate:
+            paidSub && (sub as { nextBillingDate?: Date }).nextBillingDate
+              ? new Date((sub as { nextBillingDate: Date }).nextBillingDate).toISOString()
+              : null,
+          paymentMethodOnFile: !!(sub as { paymentMethodOnFile?: boolean })?.paymentMethodOnFile,
+          renewalReminderSentAt: null,
+          daysRemaining: paidSub
+            ? getDaysRemaining((sub as { subscriptionEndsAt?: Date }).subscriptionEndsAt)
+            : null,
+          subscriptionEndsAt:
+            paidSub && (sub as { subscriptionEndsAt?: Date }).subscriptionEndsAt
+              ? new Date((sub as { subscriptionEndsAt: Date }).subscriptionEndsAt).toISOString()
+              : identityVerifiedUser
+                ? userVerifiedAtIso
+                : null,
+          lastReminderDaysMilestone: null,
+          stripeCustomerId: (sub as { stripeCustomerId?: string | null })?.stripeCustomerId ?? null,
+          stripeSubscriptionId: (sub as { stripeSubscriptionId?: string | null })?.stripeSubscriptionId ?? null,
+          membershipStatus: paid ? ("paid_active" as const) : ("customer_free" as const),
+        };
+      }
+
       return {
         verificationStatus: profile?.verificationStatus ?? "not_submitted",
         contractorLicenseNumber: profile?.licenseNumber ?? null,
@@ -276,7 +502,12 @@ export const appRouter = router({
         stripeSubscriptionId: (sub as any)?.stripeSubscriptionId ?? null,
         membershipStatus: (() => {
           const pt = (sub as any)?.planType;
-          if (pt === "annual_paid" || pt === "contractor_annual" || pt === "customer_monthly") {
+          if (
+            pt === "annual_paid" ||
+            pt === "contractor_annual" ||
+            pt === "contractor_pro_monthly" ||
+            pt === "customer_monthly"
+          ) {
             const status = (sub as any)?.status;
             if (status === "active") return "paid_active" as const;
             return "expired" as const;
@@ -319,31 +550,41 @@ export const appRouter = router({
   reviews: router({
     getForCustomer: protectedProcedure
       .input(z.object({ customerId: z.number() }))
-      .query(({ input }) => db.getReviewsForCustomer(input.customerId)),
+      .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
+        return db.getReviewsForCustomer(input.customerId);
+      }),
 
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .query(({ input }) => db.getReviewById(input.id)),
+      .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
+        return db.getReviewById(input.id);
+      }),
 
-    getMyReviews: protectedProcedure.query(({ ctx }) =>
-      db.getReviewsByContractor(ctx.user.id)
-    ),
+    getMyReviews: protectedProcedure.query(async ({ ctx }) => {
+      await requireContractorSubscriptionForPlatformTools(ctx);
+      return db.getReviewsByContractor(ctx.user.id);
+    }),
 
-    getRecent: protectedProcedure.query(() => db.getRecentReviews(20)),
+    getRecent: protectedProcedure.query(async ({ ctx }) => {
+      await requireContractorSubscriptionForPlatformTools(ctx);
+      return db.getRecentReviews(20);
+    }),
 
     create: protectedProcedure
       .input(
         z.object({
           customerId: z.number(),
           overallRating: z.number().int().min(0).max(5),
-          calculatedOverallRating: z.number().min(0).max(5).optional(),
-          // Legacy flat columns (still written for backward compat)
-          ratingPaymentReliability: z.number().int().min(0).max(5),
-          ratingCommunication: z.number().int().min(0).max(5),
-          ratingScopeChanges: z.number().int().min(0).max(5),
-          ratingPropertyRespect: z.number().int().min(0).max(5),
-          ratingPermitPulling: z.number().int().min(0).max(5),
-          ratingOverallJobExperience: z.number().int().min(0).max(5),
+          calculatedOverallRating: z.number().min(0).max(5).optional().nullable(),
+          // Legacy flat columns — null when category is N/A (never coerce to 0)
+          ratingPaymentReliability: z.number().int().min(1).max(5).nullable().optional(),
+          ratingCommunication: z.number().int().min(1).max(5).nullable().optional(),
+          ratingScopeChanges: z.number().int().min(1).max(5).nullable().optional(),
+          ratingPropertyRespect: z.number().int().min(1).max(5).nullable().optional(),
+          ratingPermitPulling: z.number().int().min(1).max(5).nullable().optional(),
+          ratingOverallJobExperience: z.number().int().min(1).max(5).nullable().optional(),
           // New structured category data
           categoryDataJson: z.string().optional(),
           wouldWorkAgain: z.string().optional(),
@@ -356,9 +597,16 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         const { calculatedOverallRating, ...rest } = input;
         const reviewId = await db.createReview({
           ...rest,
+          ratingPaymentReliability: input.ratingPaymentReliability ?? null,
+          ratingCommunication: input.ratingCommunication ?? null,
+          ratingScopeChanges: input.ratingScopeChanges ?? null,
+          ratingPropertyRespect: input.ratingPropertyRespect ?? null,
+          ratingPermitPulling: input.ratingPermitPulling ?? null,
+          ratingOverallJobExperience: input.ratingOverallJobExperience ?? null,
           contractorUserId: ctx.user.id,
           calculatedOverallRating: calculatedOverallRating != null ? String(calculatedOverallRating.toFixed(2)) : null,
         });
@@ -417,13 +665,13 @@ export const appRouter = router({
       .input(
         z.object({
           reviewId: z.number(),
-          overallRating: z.number().int().min(1).max(5).optional(),
-          ratingPaymentReliability: z.number().int().min(0).max(5).optional(),
-          ratingCommunication: z.number().int().min(0).max(5).optional(),
-          ratingScopeChanges: z.number().int().min(0).max(5).optional(),
-          ratingPropertyRespect: z.number().int().min(0).max(5).optional(),
-          ratingPermitPulling: z.number().int().min(0).max(5).optional(),
-          ratingOverallJobExperience: z.number().int().min(0).max(5).optional(),
+          overallRating: z.number().int().min(0).max(5).optional(),
+          ratingPaymentReliability: z.number().int().min(1).max(5).nullable().optional(),
+          ratingCommunication: z.number().int().min(1).max(5).nullable().optional(),
+          ratingScopeChanges: z.number().int().min(1).max(5).nullable().optional(),
+          ratingPropertyRespect: z.number().int().min(1).max(5).nullable().optional(),
+          ratingPermitPulling: z.number().int().min(1).max(5).nullable().optional(),
+          ratingOverallJobExperience: z.number().int().min(1).max(5).nullable().optional(),
           categoryDataJson: z.string().optional(),
           wouldWorkAgain: z.string().optional(),
           reviewText: z.string().max(2000).optional(),
@@ -432,22 +680,25 @@ export const appRouter = router({
           greenFlags: z.string().optional(),
         })
       )
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         const { reviewId, ...data } = input;
         return db.updateReview(reviewId, ctx.user.id, data);
       }),
 
     delete: protectedProcedure
       .input(z.object({ reviewId: z.number() }))
-      .mutation(({ ctx, input }) =>
-        db.deleteReview(input.reviewId, ctx.user.id)
-      ),
+      .mutation(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
+        return db.deleteReview(input.reviewId, ctx.user.id);
+      }),
 
     markHelpful: protectedProcedure
       .input(z.object({ reviewId: z.number() }))
-      .mutation(({ ctx, input }) =>
-        db.markReviewHelpful(input.reviewId, ctx.user.id)
-      ),
+      .mutation(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
+        return db.markReviewHelpful(input.reviewId, ctx.user.id);
+      }),
     addPhotos: protectedProcedure
       .input(
         z.object({
@@ -456,6 +707,7 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         const review = await db.getReviewById(input.reviewId);
         if (!review || review.contractorUserId !== ctx.user.id) {
           throw new Error("Review not found or unauthorized");
@@ -568,6 +820,8 @@ export const appRouter = router({
         z.object({
           stripeCustomerId: z.string(),
           plan: z.enum(["monthly", "yearly"]),
+          /** Default: monthly → customer identity; yearly → contractor Pro annual. Set `contractor_pro` for Pro monthly. */
+          productLine: z.enum(["customer_identity", "contractor_pro"]).optional(),
           paymentMethodId: z.string().optional(),
           paymentIntentId: z.string().optional(),
         })
@@ -578,14 +832,16 @@ export const appRouter = router({
           userId: ctx.user.id,
         });
         if ("subscriptionId" in result && result.subscriptionId.startsWith("sub_")) {
-          const planType = input.plan === "monthly" ? "customer_monthly" : "contractor_annual";
           await subDb.activateStripeSubscription(
             ctx.user.id,
             result.subscriptionId,
-            planType as any,
+            result.dbPlanType,
+            result.currentPeriodEnd,
           );
         }
-        return result;
+        return "subscriptionId" in result
+          ? { subscriptionId: result.subscriptionId }
+          : result;
       }),
 
     verifyPayment: protectedProcedure
@@ -605,7 +861,8 @@ export const appRouter = router({
           photoIndex: z.number(),
         })
       )
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         return s3Service.generatePresignedUploadUrl(
           input.reviewId,
           input.photoIndex
@@ -698,13 +955,15 @@ export const appRouter = router({
 
     getDisputesByCustomer: protectedProcedure
       .input(z.object({ customerId: z.number() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         return db.getDisputesByCustomer(input.customerId);
       }),
 
     getDisputesByReview: protectedProcedure
       .input(z.object({ reviewId: z.number() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         return db.getDisputesByReview(input.reviewId);
       }),
   }),
@@ -712,10 +971,12 @@ export const appRouter = router({
   // ─── Contractor Analytics ────────────────────────────────────────────────────
   analytics: router({
     getMyAnalytics: protectedProcedure.query(async ({ ctx }) => {
+      await requireContractorSubscriptionForPlatformTools(ctx);
       return analyticsDb.getContractorAnalytics(ctx.user.id);
     }),
 
     recalculateAnalytics: protectedProcedure.mutation(async ({ ctx }) => {
+      await requireContractorSubscriptionForPlatformTools(ctx);
       await analyticsDb.recalculateContractorAnalytics(ctx.user.id);
       return analyticsDb.getContractorAnalytics(ctx.user.id);
     }),
@@ -871,12 +1132,11 @@ export const appRouter = router({
       return verificationDb.getVerificationStatus(ctx.user.id);
     }),
 
-    getPendingVerifications: protectedProcedure.query(async ({ ctx }) => {
-      if (ctx.user.role !== "admin") throw new Error("Unauthorized");
+    getPendingVerifications: adminProcedure.query(async () => {
       return verificationDb.getPendingVerifications();
     }),
 
-    approveVerification: protectedProcedure
+    approveVerification: adminProcedure
       .input(z.object({
         userId: z.number(),
         idVerified: z.boolean(),
@@ -884,8 +1144,7 @@ export const appRouter = router({
         insuranceVerified: z.boolean(),
         notes: z.string().optional(),
       }))
-      .mutation(async ({ ctx, input }) => {
-        if (ctx.user.role !== "admin") throw new Error("Unauthorized");
+      .mutation(async ({ input }) => {
         const result = await verificationDb.approveVerification(
           input.userId,
           input.idVerified,
@@ -904,10 +1163,9 @@ export const appRouter = router({
         return result;
       }),
 
-    rejectVerification: protectedProcedure
+    rejectVerification: adminProcedure
       .input(z.object({ userId: z.number(), reason: z.string() }))
-      .mutation(async ({ ctx, input }) => {
-        if (ctx.user.role !== "admin") throw new Error("Unauthorized");
+      .mutation(async ({ input }) => {
         return verificationDb.rejectVerification(input.userId, input.reason);
       }),
 
@@ -929,12 +1187,14 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         return integrationImportService.createImportJob(input);
       }),
 
     getImportJobDetails: protectedProcedure
       .input(z.object({ jobId: z.number() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         return integrationImportService.getImportJobDetails(input.jobId);
       }),
 
@@ -946,13 +1206,15 @@ export const appRouter = router({
           status: z.enum(["pending", "processing", "completed", "failed", "skipped"]).optional(),
         })
       )
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         return integrationImportService.getImportHistory(input.integrationId, input.limit, input.status);
       }),
 
     getImportStats: protectedProcedure
       .input(z.object({ integrationId: z.number() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         return integrationImportService.getImportStats(input.integrationId);
       }),
 
@@ -979,7 +1241,8 @@ export const appRouter = router({
           metadata: z.record(z.string(), z.any()).optional(),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         return fraudSignalsService.recordFraudSignal(input);
       }),
 
@@ -991,19 +1254,22 @@ export const appRouter = router({
 
     getCustomerFraudHistory: protectedProcedure
       .input(z.object({ customerId: z.number(), limit: z.number().default(50) }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         return fraudSignalsService.getFraudHistory(input.customerId, input.limit);
       }),
 
     getContractorFraudHistory: protectedProcedure
       .input(z.object({ contractorUserId: z.number(), limit: z.number().default(50) }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         return fraudSignalsService.getContractorFraudHistory(input.contractorUserId, input.limit);
       }),
 
     getCustomerStats: protectedProcedure
       .input(z.object({ customerId: z.number() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         return fraudSignalsService.getCustomerFraudStats(input.customerId);
       }),
 
@@ -1031,20 +1297,24 @@ export const appRouter = router({
   // ─── Referrals ──────────────────────────────────────────────────────────────
   referrals: router({
     getReferralStatus: protectedProcedure.query(async ({ ctx }) => {
+      await requireContractorSubscriptionForPlatformTools(ctx);
       return referralService.getReferralStatus(ctx.user.id);
     }),
 
     getReferralRewards: protectedProcedure.query(async ({ ctx }) => {
+      await requireContractorSubscriptionForPlatformTools(ctx);
       return referralService.getReferralRewards(ctx.user.id);
     }),
 
     getUserReferrals: protectedProcedure.query(async ({ ctx }) => {
+      await requireContractorSubscriptionForPlatformTools(ctx);
       return referralService.getUserReferrals(ctx.user.id);
     }),
 
     sendInvitation: protectedProcedure
       .input(z.object({ email: z.string().email() }))
       .mutation(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         const contractor = await db.getContractorProfile(ctx.user.id);
         if (!contractor) return { success: false, message: "Contractor profile not found" };
         const result = await referralService.trackReferral(ctx.user.id, input.email);
@@ -1061,6 +1331,7 @@ export const appRouter = router({
     getHistory: protectedProcedure
       .input(z.object({ limit: z.number().default(50) }))
       .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         return notificationDelivery.listNotificationHistory(ctx.user.id, input.limit);
       }),
   }),
@@ -1120,6 +1391,7 @@ export const appRouter = router({
         responseText: z.string().min(10).max(2000),
       }))
       .mutation(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         const d = await getDb();
         if (!d) throw new Error("Database not available");
         const existing = await d.select().from(customerResponses).where(eq(customerResponses.reviewId, input.reviewId)).limit(1);
@@ -1142,7 +1414,8 @@ export const appRouter = router({
   disputeThread: router({
     getTimeline: protectedProcedure
       .input(z.object({ disputeId: z.number() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         const d = await getDb();
         if (!d) return [];
         return d.select().from(disputeTimeline)
@@ -1157,6 +1430,7 @@ export const appRouter = router({
         attachmentUrl: z.string().max(512).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         const d = await getDb();
         if (!d) throw new Error("Database not available");
         const role = ctx.user.role === "admin" ? "admin" as const : "customer" as const;
@@ -1173,7 +1447,8 @@ export const appRouter = router({
 
     getDispute: protectedProcedure
       .input(z.object({ disputeId: z.number() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireContractorSubscriptionForPlatformTools(ctx);
         const d = await getDb();
         if (!d) return null;
         const rows = await d.select().from(reviewDisputes).where(eq(reviewDisputes.id, input.disputeId)).limit(1);

@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,26 +12,50 @@ import {
   TextInput,
   View,
 } from "react-native";
+import * as Clipboard from "expo-clipboard";
+import * as Linking from "expo-linking";
 import { ScreenContainer } from "@/components/screen-container";
 import { ScreenBackground } from "@/components/screen-background";
 import { useColors } from "@/hooks/use-colors";
 import { trpc } from "@/lib/trpc";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuthWithLoginRedirect } from "@/hooks/use-auth-with-login-redirect";
 import { useColorScheme } from "@/hooks/use-color-scheme";
 import { useRouter } from "expo-router";
 import { TRADE_TYPES } from "@/shared/types";
+import { isAdmin, isContractor } from "@/shared/roles";
 import {
   getMembershipDisplayState,
+  getCustomerMembershipDisplayState,
   getVerificationBadge,
   validateContractorLicenseNumber,
   PRICING_COPY,
 } from "@/shared/membership";
+import { CustomerVerifyBadgeButton } from "@/components/customer-verify-badge-button";
+import { CustomerIdentityVerifiedBadge } from "@/components/customer-identity-verified-badge";
+import { DEMO_MODE } from "@/lib/demo-data";
+import { generateContractorReferralLink } from "@/lib/contractor-referral-link";
+import { openVerificationPaywall } from "@/lib/verification-paywall-navigation";
+import {
+  hasPaywallBeenShownForTrigger,
+  markPaywallShownForTrigger,
+} from "@/lib/verification-paywall-dedupe";
+import {
+  shouldShowVerificationPaywall,
+  type VerificationPaywallTrigger,
+} from "@/shared/verification-conversion";
+
+const CUSTOMER_VERIFY_PAYWALL_TRIGGER_ORDER: VerificationPaywallTrigger[] = [
+  "profile_viewed_by_contractor",
+  "high_risk_flag",
+  "submit_review_first_time",
+];
 
 export default function ProfileScreen() {
   const colors = useColors();
-  const { user, isAuthenticated, logout } = useAuth();
+  const { user, isAuthenticated, logout, contentReady } = useAuthWithLoginRedirect();
   const colorScheme = useColorScheme();
   const router = useRouter();
+  const trpcUtils = trpc.useUtils();
 
   const { data: profile, isLoading, refetch } = trpc.contractor.getProfile.useQuery(
     undefined,
@@ -60,6 +86,45 @@ export default function ProfileScreen() {
       Alert.alert("Activated", "Your 12-month free membership is now active.");
     },
   });
+  const { data: referralStats, refetch: refetchReferralStats } = trpc.contractor.getReferralStats.useQuery(
+    undefined,
+    { enabled: isAuthenticated && user?.role !== "customer" },
+  );
+  const { data: leaderboardPreview } = trpc.contractor.getReferralLeaderboardPreview.useQuery(undefined, {
+    enabled: isAuthenticated && (isContractor(user) || isAdmin(user)),
+  });
+  const dismissReferralReward = trpc.contractor.dismissReferralReward.useMutation({
+    onSuccess: () => refetchReferralStats(),
+  });
+  const rewardAlertGateRef = useRef(false);
+
+  useEffect(() => {
+    if (DEMO_MODE || user?.role === "admin" || !referralStats?.referralRewardUnseen) {
+      rewardAlertGateRef.current = false;
+      return;
+    }
+    if (rewardAlertGateRef.current) return;
+    rewardAlertGateRef.current = true;
+    Alert.alert(
+      "🎉 You earned 1 free month!",
+      "Thanks for helping other contractors find ClientCheck. Your subscription time has been extended.",
+      [
+        {
+          text: "OK",
+          onPress: () => dismissReferralReward.mutate(),
+        },
+      ],
+    );
+  }, [referralStats?.referralRewardUnseen, dismissReferralReward, user?.role]);
+  const softDeleteAccount = trpc.contractor.softDeleteAccount.useMutation({
+    async onSuccess() {
+      await logout();
+      router.replace("/select-account" as never);
+    },
+    onError(err) {
+      Alert.alert("Could not close account", err.message ?? "Please try again or contact support.");
+    },
+  });
 
   const [editing, setEditing] = useState(false);
   const [trade, setTrade] = useState("");
@@ -71,9 +136,54 @@ export default function ProfileScreen() {
   const [showTradePicker, setShowTradePicker] = useState(false);
   const [licenseSubmitField, setLicenseSubmitField] = useState("");
   const [licenseError, setLicenseError] = useState("");
+  const isCustomer = user?.role === "customer";
+  const showCustomerVerifyBadge =
+    !!user &&
+    isCustomer &&
+    !user.isVerified &&
+    (!membership || membership.membershipStatus === "customer_free");
+  const membershipDisplay = membership
+    ? isCustomer
+      ? getCustomerMembershipDisplayState({
+          planType: membership.planType,
+          subscriptionEndsAt: membership.subscriptionEndsAt,
+        })
+      : getMembershipDisplayState(membership as never)
+    : null;
+  const verificationBadge = !isCustomer ? getVerificationBadge(membership?.verificationStatus) : null;
 
-  const membershipDisplay = membership ? getMembershipDisplayState(membership) : null;
-  const verificationBadge = getVerificationBadge(membership?.verificationStatus);
+  useFocusEffect(
+    useCallback(() => {
+      if (DEMO_MODE || !user || !isCustomer || user.isVerified) return;
+      let cancelled = false;
+      void (async () => {
+        try {
+          const data = await trpcUtils.customers.getMyDirectoryInsights.fetch();
+          if (cancelled || !data?.matched) return;
+          const extra = {
+            directoryReviewCount: data.directoryReviewCount,
+            contractorProfileViewCount: data.contractorProfileViewCount,
+            riskScore: data.engineRiskScore,
+            riskLevel: data.directoryRiskLevel,
+            engineRiskLevel: data.engineRiskLevel,
+            criticalRedFlagCount: data.criticalRedFlagCount,
+          };
+          for (const ctx of CUSTOMER_VERIFY_PAYWALL_TRIGGER_ORDER) {
+            if (!shouldShowVerificationPaywall(ctx, user, extra)) continue;
+            if (await hasPaywallBeenShownForTrigger(ctx)) continue;
+            await markPaywallShownForTrigger(ctx);
+            openVerificationPaywall(router, ctx);
+            break;
+          }
+        } catch {
+          /* ignore */
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [user, isCustomer, trpcUtils, router]),
+  );
 
   const handleSubmitLicense = () => {
     const validation = validateContractorLicenseNumber(licenseSubmitField);
@@ -107,17 +217,35 @@ export default function ProfileScreen() {
     setEditing(false);
   };
 
-  if (!isAuthenticated) {
+  const handleDeleteContractorAccount = () => {
+    Alert.alert(
+      "Delete contractor account?",
+      "Customers you entered and reviews you submitted stay in ClientCheck for the community. Your sign-in will stop working and profile data on this account will be cleared. Subscription billing is cancelled when applicable. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete account",
+          style: "destructive",
+          onPress: () => softDeleteAccount.mutate({ confirm: "DELETE_MY_ACCOUNT" }),
+        },
+      ],
+    );
+  };
+
+  const showContractorAccountClosure =
+    user?.role === "contractor" || user?.role === "user";
+
+  if (!contentReady) {
     return (
-      <ScreenContainer className="p-6">
-        <View style={styles.authPrompt}>
-          <Text style={styles.authEmoji}>🔐</Text>
-          <Text style={[styles.authTitle, { color: colors.foreground }]}>Sign In Required</Text>
-          <Text style={[styles.authDesc, { color: colors.muted }]}>
-            Please sign in to view and manage your contractor profile.
-          </Text>
-        </View>
-      </ScreenContainer>
+      <ScreenBackground backgroundKey="auth">
+        <ScreenContainer
+          edges={["top", "left", "right"]}
+          containerClassName="bg-transparent"
+          className="flex-1 items-center justify-center"
+        >
+          <ActivityIndicator size="large" color={colors.primary} />
+        </ScreenContainer>
+      </ScreenBackground>
     );
   }
 
@@ -145,16 +273,39 @@ export default function ProfileScreen() {
             </Text>
           </View>
           <View style={styles.userInfo}>
-            <Text style={[styles.userName, { color: colors.foreground }]}>
-              {user?.name ?? "Contractor"}
-            </Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <Text style={[styles.userName, { color: colors.foreground }]}>
+                {user?.name ?? "Contractor"}
+              </Text>
+              {isCustomer && user?.isVerified ? <CustomerIdentityVerifiedBadge size="md" /> : null}
+            </View>
             {user?.email && (
               <Text style={[styles.userEmail, { color: colors.muted }]}>{user.email}</Text>
             )}
           </View>
         </View>
 
+        {/* Customer summary (contractor tools are separate) */}
+        {isCustomer ? (
+          <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Customer account</Text>
+            <Text style={[styles.aboutText, { color: colors.muted }]}>
+              Your account is free: view your profile, see reviews associated with you, respond publicly, and submit
+              disputes. An identity verification badge is optional — open Billing anytime to add it.
+            </Text>
+            {showCustomerVerifyBadge ? <CustomerVerifyBadgeButton /> : null}
+            <Pressable
+              onPress={() => router.push("/subscription" as never)}
+              style={({ pressed }) => [styles.linkRow, { borderTopColor: colors.border, marginTop: 8 }, pressed && { opacity: 0.6 }]}
+            >
+              <Text style={[styles.linkLabel, { color: colors.foreground }]}>Billing & optional upgrades</Text>
+              <Text style={[styles.linkArrow, { color: colors.muted }]}>›</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
         {/* Contractor Profile */}
+        {!isCustomer ? (
         <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Contractor Details</Text>
 
@@ -329,6 +480,7 @@ export default function ProfileScreen() {
             </View>
           )}
         </View>
+        ) : null}
 
         {/* App Settings */}
         <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -343,9 +495,12 @@ export default function ProfileScreen() {
 
         {/* Membership & Verification */}
         <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Membership</Text>
+          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>
+            {isCustomer ? "Account & billing" : "Membership"}
+          </Text>
 
-          {/* Verification badge */}
+          {/* Verification badge (contractor license flow) */}
+          {!isCustomer && verificationBadge ? (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 }}>
             <View style={{ backgroundColor: verificationBadge.bgColor, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 }}>
               <Text style={{ color: verificationBadge.color, fontSize: 13, fontWeight: "600" }}>
@@ -358,6 +513,7 @@ export default function ProfileScreen() {
               </Text>
             )}
           </View>
+          ) : null}
 
           {/* Membership status */}
           {membershipDisplay ? (
@@ -398,7 +554,8 @@ export default function ProfileScreen() {
           ) : null}
 
           {/* License submission (only show if not yet submitted) */}
-          {membership?.verificationStatus === "not_submitted" || membership?.verificationStatus === "rejected" ? (
+          {!isCustomer &&
+          (membership?.verificationStatus === "not_submitted" || membership?.verificationStatus === "rejected") ? (
             <View style={{ gap: 8, paddingTop: 8, borderTopWidth: 0.5, borderTopColor: colors.border }}>
               <Text style={{ color: colors.foreground, fontSize: 14, fontWeight: "600" }}>
                 Submit Contractor License
@@ -435,7 +592,7 @@ export default function ProfileScreen() {
           ) : null}
 
           {/* Activate free year if verified but not yet activated */}
-          {membership?.verificationStatus === "verified" && membership?.planType === "none" ? (
+          {!isCustomer && membership?.verificationStatus === "verified" && membership?.planType === "none" ? (
             <View style={{ gap: 8, paddingTop: 8, borderTopWidth: 0.5, borderTopColor: colors.border }}>
               <Text style={{ color: colors.foreground, fontSize: 14, fontWeight: "600" }}>
                 Activate Your Free 12 Months
@@ -467,6 +624,148 @@ export default function ProfileScreen() {
             <Text style={[styles.linkArrow, { color: colors.muted }]}>›</Text>
           </Pressable>
         </View>
+
+        {/* Contractor referrals */}
+        {!isCustomer && user?.id && referralStats ? (
+          <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View style={styles.referralSectionHeaderRow}>
+              <Text style={[styles.sectionTitle, styles.referralSectionTitleFlex, { color: colors.foreground }]}>
+                Invite contractors. Earn free months.
+              </Text>
+              <View style={[styles.scarcityPill, { backgroundColor: `${colors.primary}14`, borderColor: `${colors.primary}55` }]}>
+                <Text style={[styles.scarcityPillText, { color: colors.primary }]}>Limited early access period</Text>
+              </View>
+            </View>
+            <Text style={[styles.aboutText, { color: colors.muted, marginBottom: 8 }]}>
+              Invite other contractors. Get 1 free month for every 5 verified signups (they must complete contractor
+              verification).
+            </Text>
+            <Text style={[styles.referralVelocityLine, { color: colors.muted }]}>
+              Most contractors earn their first free month in under 7 days
+            </Text>
+            <View
+              style={[
+                styles.referralRewardHighlight,
+                { borderColor: `${colors.primary}40`, backgroundColor: `${colors.primary}0d` },
+              ]}
+            >
+              <Text style={[styles.referralRewardHighlightTitle, { color: colors.foreground }]}>Reward</Text>
+              <Text style={[styles.referralRewardHighlightValue, { color: colors.primary }]}>
+                1 free month per 5 verified referrals
+              </Text>
+            </View>
+            {(() => {
+              const link = generateContractorReferralLink(user.id);
+              const shareText = `Check customers before you take the job — join me on ClientCheck: ${link}`;
+              const v = referralStats.verifiedReferralCount;
+              const slotNum = v % 5 === 0 && v > 0 ? 5 : v % 5;
+              const progress = slotNum / 5;
+              return (
+                <>
+                  <Text style={{ color: colors.muted, fontSize: 12, marginBottom: 8, lineHeight: 18, marginTop: 4 }} selectable>
+                    {link}
+                  </Text>
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+                    <Pressable
+                      onPress={() => void Clipboard.setStringAsync(link)}
+                      style={({ pressed }) => [styles.referralChip, { borderColor: colors.border }, pressed && { opacity: 0.85 }]}
+                    >
+                      <Text style={{ color: colors.foreground, fontWeight: "600", fontSize: 13 }}>Copy link</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => {
+                        const url = `sms:?body=${encodeURIComponent(shareText)}`;
+                        if (Platform.OS === "web" && typeof window !== "undefined") window.location.href = url;
+                        else void Linking.openURL(url);
+                      }}
+                      style={({ pressed }) => [styles.referralChip, { borderColor: colors.border }, pressed && { opacity: 0.85 }]}
+                    >
+                      <Text style={{ color: colors.foreground, fontWeight: "600", fontSize: 13 }}>SMS</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => {
+                        const url = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(link)}`;
+                        if (Platform.OS === "web" && typeof window !== "undefined") window.open(url, "_blank", "noopener,noreferrer");
+                        else void Linking.openURL(url);
+                      }}
+                      style={({ pressed }) => [styles.referralChip, { borderColor: colors.border }, pressed && { opacity: 0.85 }]}
+                    >
+                      <Text style={{ color: colors.foreground, fontWeight: "600", fontSize: 13 }}>Facebook</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() =>
+                        void Linking.openURL(`https://wa.me/?text=${encodeURIComponent(shareText)}`)
+                      }
+                      style={({ pressed }) => [styles.referralChip, { borderColor: colors.border }, pressed && { opacity: 0.85 }]}
+                    >
+                      <Text style={{ color: colors.foreground, fontWeight: "600", fontSize: 13 }}>WhatsApp</Text>
+                    </Pressable>
+                  </View>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                    <Text style={{ color: colors.foreground, fontWeight: "700" }}>Total invites</Text>
+                    <Text style={{ color: colors.muted }}>{referralStats.referralCount}</Text>
+                  </View>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 8 }}>
+                    <Text style={{ color: colors.foreground, fontWeight: "700" }}>Verified referrals</Text>
+                    <Text style={{ color: colors.muted }}>
+                      {slotNum} / 5 this cycle
+                    </Text>
+                  </View>
+                  <View style={{ height: 8, borderRadius: 4, backgroundColor: colors.border, overflow: "hidden", marginBottom: 10 }}>
+                    <View style={{ height: "100%", width: `${progress * 100}%`, backgroundColor: colors.primary }} />
+                  </View>
+                  <Text style={{ color: colors.muted, fontSize: 13, marginBottom: 4 }}>
+                    Next reward in {referralStats.nextReferralsUntilReward} verified referral
+                    {referralStats.nextReferralsUntilReward === 1 ? "" : "s"}
+                  </Text>
+                  <Text style={{ color: colors.muted, fontSize: 12 }}>
+                    Free months earned: {referralStats.freeMonthsEarned}
+                    {referralStats.subscriptionExtendedUntil
+                      ? ` · Extended through ${new Date(referralStats.subscriptionExtendedUntil).toLocaleDateString()}`
+                      : ""}
+                  </Text>
+                </>
+              );
+            })()}
+          </View>
+        ) : null}
+
+        {!isCustomer && user?.id && referralStats ? (
+          <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={[styles.sectionTitle, { color: colors.foreground, marginBottom: 10 }]}>Top Referrers</Text>
+            {leaderboardPreview && leaderboardPreview.entries.length > 0 ? (
+              <View style={{ gap: 10 }}>
+                {leaderboardPreview.entries.map((row) => (
+                  <View
+                    key={row.rank}
+                    style={[styles.leaderboardRow, { borderColor: colors.border, backgroundColor: colors.background }]}
+                  >
+                    <Text style={styles.leaderboardMedal} accessibilityLabel={`Rank ${row.rank}`}>
+                      {row.rank === 1 ? "🥇" : row.rank === 2 ? "🥈" : "🥉"}
+                    </Text>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={{ color: colors.foreground, fontWeight: "700", fontSize: 15 }} numberOfLines={1}>
+                        {row.displayName}
+                      </Text>
+                      <Text style={{ color: colors.muted, fontSize: 13, marginTop: 2 }}>
+                        {row.verifiedCount} verified referral{row.verifiedCount === 1 ? "" : "s"}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <View style={[styles.leaderboardTeaserCard, { borderColor: colors.border, backgroundColor: colors.background }]}>
+                <Text style={{ color: colors.foreground, fontWeight: "800", fontSize: 16, marginBottom: 6 }}>
+                  Top Referrers leaderboard coming soon
+                </Text>
+                <Text style={{ color: colors.muted, fontSize: 14, lineHeight: 20 }}>
+                  See which contractors are leading the community.
+                </Text>
+              </View>
+            )}
+          </View>
+        ) : null}
 
         {/* About */}
         <View style={[styles.section, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -524,6 +823,41 @@ export default function ProfileScreen() {
           </Pressable>
         </View>
 
+        {showContractorAccountClosure ? (
+          <View
+            style={[
+              styles.section,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.error + "55",
+                borderWidth: 1,
+              },
+            ]}
+          >
+            <Text style={[styles.sectionTitle, { color: colors.error }]}>Danger zone</Text>
+            <Text style={[styles.dangerHint, { color: colors.muted }]}>
+              Soft-delete your contractor account. Customer records and your review history are not removed.
+            </Text>
+            <Pressable
+              onPress={handleDeleteContractorAccount}
+              disabled={softDeleteAccount.isPending}
+              style={({ pressed }) => [
+                styles.dangerDeleteBtn,
+                {
+                  backgroundColor: colors.error + "14",
+                  borderColor: colors.error + "55",
+                  opacity: softDeleteAccount.isPending ? 0.6 : 1,
+                },
+                pressed && !softDeleteAccount.isPending && { opacity: 0.85 },
+              ]}
+            >
+              <Text style={[styles.dangerDeleteBtnText, { color: colors.error }]}>
+                {softDeleteAccount.isPending ? "Closing account…" : "Delete contractor account"}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
+
         {/* Logout */}
         <Pressable
           onPress={logout}
@@ -565,23 +899,21 @@ const styles = StyleSheet.create({
     paddingBottom: 100,
     gap: 16,
   },
-  authPrompt: {
-    flex: 1,
+  dangerHint: {
+    fontSize: 13,
+    lineHeight: 19,
+    marginBottom: 14,
+  },
+  dangerDeleteBtn: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1,
     alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
   },
-  authEmoji: {
-    fontSize: 56,
-  },
-  authTitle: {
-    fontSize: 22,
+  dangerDeleteBtnText: {
+    fontSize: 15,
     fontWeight: "700",
-  },
-  authDesc: {
-    fontSize: 14,
-    textAlign: "center",
-    lineHeight: 20,
   },
   userCard: {
     flexDirection: "row",
@@ -771,5 +1103,82 @@ const styles = StyleSheet.create({
   linkArrow: {
     fontSize: 20,
     fontWeight: "300",
+  },
+  referralChip: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  referralSectionHeaderRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "flex-start",
+    gap: 10,
+    marginBottom: 4,
+  },
+  referralSectionTitleFlex: {
+    flex: 1,
+    minWidth: 180,
+    marginBottom: 0,
+  },
+  scarcityPill: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    alignSelf: "flex-start",
+  },
+  scarcityPillText: {
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+    textTransform: "uppercase",
+  },
+  referralVelocityLine: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "600",
+    marginBottom: 12,
+  },
+  referralRewardHighlight: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+  },
+  referralRewardHighlightTitle: {
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginBottom: 4,
+    opacity: 0.85,
+  },
+  referralRewardHighlightValue: {
+    fontSize: 17,
+    fontWeight: "800",
+    lineHeight: 22,
+  },
+  leaderboardRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  leaderboardMedal: {
+    fontSize: 22,
+    width: 32,
+    textAlign: "center",
+  },
+  leaderboardTeaserCard: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
   },
 });

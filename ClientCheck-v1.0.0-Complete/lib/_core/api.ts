@@ -76,18 +76,26 @@ export async function logout(): Promise<void> {
   });
 }
 
-// Get current authenticated user (web uses cookie-based auth)
-export async function getMe(): Promise<{
-  id: number;
-  openId: string;
+/** JSON shape for GET /api/auth/me → `{ user }` (datetimes as ISO 8601 strings). */
+export type MeUserJson = {
+  id: number | null;
+  openId: string | null;
   name: string | null;
   email: string | null;
   loginMethod: string | null;
+  role: string | null;
+  isVerified: boolean;
+  verifiedAt: string | null;
   lastSignedIn: string;
-} | null> {
+  /** Set once after first OAuth sync; cleared after first GET /api/auth/me on web. */
+  isNewUser?: boolean;
+};
+
+// Get current authenticated user (web uses cookie-based auth)
+export async function getMe(): Promise<MeUserJson | null> {
   try {
-    const result = await apiCall<{ user: any }>("/api/auth/me");
-    return result.user || null;
+    const result = await apiCall<{ user: MeUserJson | null }>("/api/auth/me");
+    return result.user ?? null;
   } catch (error) {
     // 401 / "Not authenticated" is expected when session expired — not a real error
     const msg = error instanceof Error ? error.message : "";

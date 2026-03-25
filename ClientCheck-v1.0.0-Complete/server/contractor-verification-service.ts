@@ -7,6 +7,7 @@ import { contractorProfiles, verificationDocuments } from "../drizzle/schema";
 import { getDb } from "./db";
 import { queueNotification } from "./services/notification-delivery-service";
 import { writeAuditLog } from "./services/audit-log-service";
+import { processContractorInviteReferralOnVerified } from "./contractor-invite-referral-service";
 
 export interface VerificationDocumentInput {
   type: "id" | "license" | "insurance" | "identity" | "business_registration" | "tax_document";
@@ -93,6 +94,9 @@ export async function approveVerification(userId: number, reviewedByUserId?: num
   }).where(eq(contractorProfiles.userId, userId));
   await writeAuditLog({ actorUserId: reviewedByUserId ?? null, actorRole: reviewedByUserId ? "admin" : null, action: "verification.approved", entityType: "contractor_profile", entityId: userId, metadata: { notes } });
   await queueNotification({ userId, channel: "email", templateKey: "verification_approved", payload: { userId } });
+  void processContractorInviteReferralOnVerified(userId).catch((e) =>
+    console.warn("[approveVerification] contractor invite referral hook:", e),
+  );
   return true;
 }
 

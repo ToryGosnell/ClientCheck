@@ -2,6 +2,11 @@ import { ThemedView } from "@/components/themed-view";
 import { startOAuthLogin } from "@/constants/oauth";
 import * as Api from "@/lib/_core/api";
 import * as Auth from "@/lib/_core/auth";
+import { consumePostLoginRedirect } from "@/lib/post-login-redirect";
+import { resolvePostLoginDestination } from "@/lib/resolve-post-login-destination";
+import { tryApplyPendingContractorInviteReferral } from "@/lib/contractor-invite-after-login";
+import { tryApplyPendingShareReferral } from "@/lib/share-referral-after-login";
+import { trackSignupCompletedIfNew } from "@/lib/signup-completed-analytics";
 import * as Linking from "expo-linking";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
@@ -26,6 +31,14 @@ export default function OAuthCallback() {
     if (handled.current) return;
     handled.current = true;
 
+    const navigateAfterSession = async () => {
+      await tryApplyPendingContractorInviteReferral();
+      await tryApplyPendingShareReferral();
+      const dest = await consumePostLoginRedirect();
+      const path = await resolvePostLoginDestination(dest);
+      setTimeout(() => router.replace(path as never), 800);
+    };
+
     const handleCallback = async () => {
       try {
         // 1. Session token already present (web OAuth callback from server redirect)
@@ -38,23 +51,20 @@ export default function OAuthCallback() {
                 typeof atob !== "undefined"
                   ? atob(params.user)
                   : Buffer.from(params.user, "base64").toString("utf-8");
-              const userData = JSON.parse(userJson);
-              const userInfo: Auth.User = {
-                id: userData.id,
-                openId: userData.openId,
-                name: userData.name,
-                email: userData.email,
-                loginMethod: userData.loginMethod,
-                lastSignedIn: new Date(userData.lastSignedIn || Date.now()),
-              };
+              const userData = JSON.parse(userJson) as Record<string, unknown>;
+              const userInfo = Auth.userFromApiJson(userData);
               await Auth.setUserInfo(userInfo);
+              void trackSignupCompletedIfNew({
+                id: userInfo.id,
+                isNewUser: userData.isNewUser === true,
+              });
             } catch {
               // User data parsing failed — session token is still valid
             }
           }
 
           setStatus("success");
-          setTimeout(() => router.replace("/(tabs)"), 800);
+          await navigateAfterSession();
           return;
         }
 
@@ -102,7 +112,7 @@ export default function OAuthCallback() {
         if (sessionToken) {
           await Auth.setSessionToken(sessionToken);
           setStatus("success");
-          setTimeout(() => router.replace("/(tabs)"), 800);
+          await navigateAfterSession();
           return;
         }
 
@@ -120,19 +130,17 @@ export default function OAuthCallback() {
           await Auth.setSessionToken(result.sessionToken);
 
           if (result.user) {
-            const userInfo: Auth.User = {
-              id: result.user.id,
-              openId: result.user.openId,
-              name: result.user.name,
-              email: result.user.email,
-              loginMethod: result.user.loginMethod,
-              lastSignedIn: new Date(result.user.lastSignedIn || Date.now()),
-            };
+            const raw = result.user as Record<string, unknown>;
+            const userInfo = Auth.userFromApiJson(raw);
             await Auth.setUserInfo(userInfo);
+            void trackSignupCompletedIfNew({
+              id: userInfo.id,
+              isNewUser: raw.isNewUser === true,
+            });
           }
 
           setStatus("success");
-          setTimeout(() => router.replace("/(tabs)"), 800);
+          await navigateAfterSession();
         } else {
           setStatus("error");
           setErrorMessage("Sign-in could not be completed. Please try again.");

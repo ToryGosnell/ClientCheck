@@ -2,10 +2,10 @@
  * Membership, verification, and subscription business logic.
  *
  * Pricing policy:
- *   - Verified contractors get 12 months free
+ *   - Verified contractors start on the free tier (limited searches)
  *   - Verification requires a valid contractor license number
- *   - After 12 months, $100.00 / year
- *   - 3-day reminder before expiration
+ *   - Contractor Pro (monthly or annual) unlocks full intelligence features
+ *   - Renewal reminders before expiration
  */
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -14,7 +14,13 @@ export type VerificationStatus = "not_submitted" | "pending" | "verified" | "rej
 
 export type PlanType = "verified_contractor_free_year" | "annual_paid" | "none";
 
-export type MembershipStatus = "inactive" | "free_year_active" | "paid_active" | "expired" | "cancelled";
+export type MembershipStatus =
+  | "inactive"
+  | "free_year_active"
+  | "paid_active"
+  | "expired"
+  | "cancelled"
+  | "customer_free";
 
 export interface MembershipState {
   membershipStatus: MembershipStatus;
@@ -45,8 +51,8 @@ export interface MembershipDisplay {
 // ── Constants ────────────────────────────────────────────────────────────────
 
 export const FREE_YEAR_MONTHS = 12;
-export const ANNUAL_PRICE = 120.0;
-export const ANNUAL_PRICE_DISPLAY = "$120.00";
+export const ANNUAL_PRICE = 149.0;
+export const ANNUAL_PRICE_DISPLAY = "$149.00";
 export const REMINDER_DAYS_BEFORE_EXPIRY = 30;
 export const REMINDER_SCHEDULE = [30, 14, 3, 1] as const;
 export const MIN_LICENSE_LENGTH = 4;
@@ -55,9 +61,9 @@ export const MAX_LICENSE_LENGTH = 30;
 // ── Copy (app-store safe) ───────────────────────────────────────────────────
 
 export const PRICING_COPY = {
-  freeOffer: "12 months free for all contractors from signup",
+  freeOffer: "Verified contractors start on the free tier with limited searches",
   licenseRequired: "Contractor license may be required for verification",
-  afterFree: `After the free period, membership renews at ${ANNUAL_PRICE_DISPLAY}/year`,
+  afterFree: `Upgrade to Contractor Pro anytime — annual plan renews at ${ANNUAL_PRICE_DISPLAY}/year`,
   reminderNotice: "You'll be reminded before your free period ends to add payment information",
   renewalPrompt: (days: number) =>
     `Your contractor membership expires in ${days} day${days === 1 ? "" : "s"}. Renew now for ${ANNUAL_PRICE_DISPLAY}/year to keep full access.`,
@@ -190,6 +196,45 @@ export function isFreeYearExpired(user: {
   return new Date(user.freeTrialEndAt).getTime() <= Date.now();
 }
 
+/** Billing / account messaging for customer role (core access is always free). */
+export function getCustomerMembershipDisplayState(user: {
+  planType?: string | null;
+  subscriptionEndsAt?: string | null;
+}): MembershipDisplay {
+  const pt = user.planType ?? "free_customer";
+  const hasPaidAddon =
+    pt === "customer_identity_verification" || pt === "customer_monthly";
+  if (hasPaidAddon) {
+    const exp = user.subscriptionEndsAt
+      ? new Date(user.subscriptionEndsAt).toLocaleDateString()
+      : null;
+    return {
+      statusLabel: "Verification add-on",
+      statusColor: "green",
+      statusEmoji: "✅",
+      headline: "Identity verification badge active",
+      description:
+        "Optional paid badge on your profile. Responding to reviews and disputes stays free.",
+      showRenewalReminder: false,
+      renewalReminderText: null,
+      showAddPayment: false,
+      expiresAt: exp,
+    };
+  }
+  return {
+    statusLabel: "Free customer account",
+    statusColor: "green",
+    statusEmoji: "👤",
+    headline: "Free account — no subscription required",
+    description:
+      "View your profile, respond to reviews, and submit disputes at no charge. Optional identity verification badge available anytime from Billing.",
+    showRenewalReminder: false,
+    renewalReminderText: null,
+    showAddPayment: false,
+    expiresAt: null,
+  };
+}
+
 export function getMembershipDisplayState(user: {
   verificationStatus?: VerificationStatus | string | null;
   planType?: PlanType | string | null;
@@ -208,7 +253,7 @@ export function getMembershipDisplayState(user: {
       statusLabel: "Not Verified",
       statusColor: "gray",
       statusEmoji: "📋",
-      headline: "Verify to get 12 months free",
+      headline: "Verify to unlock the free tier",
       description: PRICING_COPY.freeOffer + ". " + PRICING_COPY.licenseRequired + ".",
       showRenewalReminder: false,
       renewalReminderText: null,

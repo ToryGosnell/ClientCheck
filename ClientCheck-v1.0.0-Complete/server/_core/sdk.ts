@@ -275,6 +275,10 @@ class SDKServer {
       throw ForbiddenError("User not found");
     }
 
+    if (!db.isUserAccountActive(user)) {
+      throw ForbiddenError("This account has been closed");
+    }
+
     await db.upsertUser({
       openId: user.openId,
       lastSignedIn: signedInAt,

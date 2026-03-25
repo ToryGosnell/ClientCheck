@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/mysql2";
 import { contractorProfiles } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
+import { processContractorInviteReferralOnVerified } from "./contractor-invite-referral-service";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -66,6 +67,10 @@ export async function approveVerification(
       verificationNotes: notes || null,
     })
     .where(eq(contractorProfiles.userId, userId));
+
+  void processContractorInviteReferralOnVerified(userId).catch((e) =>
+    console.warn("[verification-db.approveVerification] contractor invite referral hook:", e),
+  );
 
   return { success: true };
 }

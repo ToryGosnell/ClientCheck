@@ -308,12 +308,30 @@ export function getDemoResponse(procedure: string, _input?: unknown): unknown {
       return CUSTOMERS[0];
     }
 
-    case "customers.create":
-      return CUSTOMERS[0];
+    case "customers.create": {
+      const fn = typeof input.firstName === "string" ? input.firstName : "New";
+      const ln = typeof input.lastName === "string" ? input.lastName : "Customer";
+      return { id: 99999, isNew: true, firstName: fn, lastName: ln };
+    }
     case "customers.getRecent":
       return CUSTOMERS.slice(0, 5);
     case "customers.getTopRated":
       return CUSTOMERS.filter((c) => parseFloat(c.overallRating) >= 4);
+
+    case "customers.getMyDirectoryInsights":
+      return {
+        matched: true,
+        customerId: 2,
+        directoryReviewCount: 1,
+        contractorProfileViewCount: 3,
+        criticalRedFlagCount: 0,
+        directoryRiskLevel: "medium" as const,
+        engineRiskScore: 55,
+        engineRiskLevel: "high" as const,
+      };
+
+    case "customers.recordContractorProfileView":
+      return { ok: true as const, contractorProfileViewCount: 4 };
 
     case "reviews.getById": {
       const rId = toNum(input.id) ?? toNum(input.reviewId);
@@ -345,7 +363,7 @@ export function getDemoResponse(procedure: string, _input?: unknown): unknown {
     case "reviews.markHelpful":
       return { success: true };
     case "reviews.create":
-      return REVIEWS[0];
+      return { reviewId: REVIEWS[0]?.id ?? 1, success: true as const };
 
     case "subscription.getMembership":
       return MEMBERSHIP;
@@ -398,6 +416,27 @@ export function getDemoResponse(procedure: string, _input?: unknown): unknown {
       };
     case "contractor.upsertProfile":
       return { success: true };
+
+    case "contractor.getReferralStats":
+      return {
+        referralCount: 2,
+        verifiedReferralCount: 3,
+        freeMonthsEarned: 0,
+        nextReferralsUntilReward: 2,
+        referralRewardUnseen: false,
+        subscriptionExtendedUntil: null,
+      };
+    case "contractor.dismissReferralReward":
+      return { ok: true as const };
+
+    case "contractor.getReferralLeaderboardPreview":
+      return {
+        entries: [
+          { rank: 1, displayName: "Summit Electric Co.", verifiedCount: 12 },
+          { rank: 2, displayName: "Northside HVAC", verifiedCount: 8 },
+          { rank: 3, displayName: "Alex M.", verifiedCount: 5 },
+        ],
+      };
 
     case "verification.submitLicenseNumber":
       return { success: true, status: "verified" };

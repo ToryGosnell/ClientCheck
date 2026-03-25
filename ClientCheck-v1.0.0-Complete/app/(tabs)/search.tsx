@@ -16,7 +16,7 @@ import { ScreenContainer } from "@/components/screen-container";
 import { ScreenBackground } from "@/components/screen-background";
 import { StatePicker } from "@/components/state-picker";
 import { useColors } from "@/hooks/use-colors";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuthWithLoginRedirect } from "@/hooks/use-auth-with-login-redirect";
 import { useSearchLimit } from "@/hooks/use-search-limit";
 import { getApiBaseUrl } from "@/constants/oauth";
 import { DEMO_MODE } from "@/lib/demo-data";
@@ -33,6 +33,7 @@ import {
 import { track } from "@/lib/analytics";
 import { isAlgoliaClientSearchConfigured, searchCustomersViaAlgolia } from "@/lib/algolia-customer-search";
 import type { Customer } from "@/drizzle/schema";
+import { CustomerIdentityVerifiedBadge } from "@/components/customer-identity-verified-badge";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -134,7 +135,7 @@ export default function SearchScreen() {
   const colors = useColors();
   const router = useRouter();
   const params = useLocalSearchParams<{ q?: string | string[] }>();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, contentReady } = useAuthWithLoginRedirect();
   const inputRef = useRef<TextInput>(null);
 
   const [query, setQuery] = useState(() => firstSearchParam(params.q));
@@ -177,7 +178,7 @@ export default function SearchScreen() {
         state: selectedState || undefined,
         hitsPerPage: MAX_RESULTS,
       }),
-    enabled: searchEnabled && algoliaConfigured,
+    enabled: isAuthenticated && searchEnabled && algoliaConfigured,
     staleTime: 15_000,
     retry: false,
   });
@@ -233,7 +234,7 @@ export default function SearchScreen() {
       console.log("[customer-search] REST rows after state filter + cap", { count: sliced.length });
       return sliced;
     },
-    enabled: searchEnabled && useRestFallback,
+    enabled: isAuthenticated && searchEnabled && useRestFallback,
     placeholderData: keepPreviousData,
     retry: 2,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
@@ -436,6 +437,7 @@ export default function SearchScreen() {
         city: customer.city ?? undefined,
         state: customer.state ?? undefined,
         addedAt: Date.now(),
+        identityVerified: (customer as Customer & { identityVerified?: boolean }).identityVerified,
       };
       const added = toggleWatch(payload);
       setSaveUiTick((n) => n + 1);
@@ -472,6 +474,20 @@ export default function SearchScreen() {
   // ─── Render ─────────────────────────────────────────────────────────────────
   // RN Web: whitespace/newlines between JSX siblings inside <View> become text
   // nodes and crash. Use array children so only elements are passed (no "\n" nodes).
+
+  if (!contentReady) {
+    return (
+      <ScreenBackground backgroundKey="auth">
+        <ScreenContainer
+          edges={["top", "left", "right"]}
+          containerClassName="bg-transparent"
+          className="flex-1 items-center justify-center"
+        >
+          <ActivityIndicator size="large" color={colors.primary} />
+        </ScreenContainer>
+      </ScreenBackground>
+    );
+  }
 
   return (
     <ScreenBackground backgroundKey="search">
@@ -532,7 +548,7 @@ export default function SearchScreen() {
                       key="ti"
                       ref={inputRef}
                       style={[st.input, { color: colors.foreground }]}
-                      placeholder="Type a customer name, phone, or city"
+                      placeholder="Search customer name, phone, or location"
                       placeholderTextColor="rgba(255,255,255,0.35)"
                       value={query}
                       editable={true}
@@ -585,7 +601,7 @@ export default function SearchScreen() {
                     lineHeight: 17,
                   }}
                 >
-                  Results update as you type (after 2 characters).
+                  Results update as you type (after 2 characters). Sign in to leave a review.
                 </Text>,
                 __DEV__ ? (
                   <View key="dbgfb" style={st.debugWrap}>
@@ -671,10 +687,10 @@ export default function SearchScreen() {
                     <View key="empty" style={st.emptyCenter}>
                       {[
                         <Text key="e1" style={{ fontSize: 40, marginBottom: 8 }}>🔍</Text>,
-                        <Text key="e2" style={[st.emptyTitle, { color: colors.foreground }]}>Search a customer to get started</Text>,
+                        <Text key="e2" style={[st.emptyTitle, { color: colors.foreground }]}>Find a customer</Text>,
                         <Text key="e3" style={[st.emptyDesc, { color: "rgba(255,255,255,0.45)" }]}>
-                          Type at least 2 characters in the field above — results update as you type. Optionally pick a state
-                          to narrow the list. Tap a row to open the customer profile; use Track customer for Alerts.
+                          Search for a customer to view history or leave a review. Type at least 2 characters — optionally
+                          pick a state to narrow results.
                         </Text>,
                       ]}
                     </View>
@@ -771,13 +787,20 @@ export default function SearchScreen() {
 
                                 <View key="bd" style={st.resultBody}>
                                   {[
-                                    <HighlightedText
+                                    <View
                                       key="nm"
-                                      text={fullName}
-                                      highlight={debouncedQuery}
-                                      style={[st.resultName, { color: colors.foreground }]}
-                                      highlightColor={highlightColor}
-                                    />,
+                                      style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}
+                                    >
+                                      <HighlightedText
+                                        text={fullName}
+                                        highlight={debouncedQuery}
+                                        style={[st.resultName, { color: colors.foreground }]}
+                                        highlightColor={highlightColor}
+                                      />
+                                      {(item as Customer & { identityVerified?: boolean }).identityVerified ? (
+                                        <CustomerIdentityVerifiedBadge size="sm" />
+                                      ) : null}
+                                    </View>,
                                     location ? (
                                       <HighlightedText
                                         key="loc"
@@ -847,15 +870,32 @@ export default function SearchScreen() {
                     <View key="nor" style={st.emptyCenter}>
                       {[
                         <Text key="n1" style={{ fontSize: 36, marginBottom: 8 }}>📋</Text>,
-                        <Text key="n2" style={[st.emptyTitle, { color: colors.foreground }]}>No customer profiles found</Text>,
+                        <Text key="n2" style={[st.emptyTitle, { color: colors.foreground }]}>No matching customer found.</Text>,
                         <Text key="n3" style={[st.emptyDesc, { color: "rgba(255,255,255,0.45)" }]}>
-                          {`Nothing matched “${debouncedQuery}”${selectedState ? ` in ${selectedState}` : ""}. Next: try a different spelling, search another name, or clear the state filter. Still stuck? Search from the home screen or remove filters.`}
+                          {`Nothing matched “${debouncedQuery}”${selectedState ? ` in ${selectedState}` : ""}. Try a different spelling or clear the state filter.`}
                         </Text>,
                         selectedState ? (
                           <Pressable key="n4" onPress={() => setSelectedState("")} style={[st.ctaBtn, { backgroundColor: colors.primary, marginTop: 8 }]}>
                             <Text style={st.ctaBtnText}>Clear state filter</Text>
                           </Pressable>
                         ) : null,
+                        isAuthenticated ? (
+                          <Pressable
+                            key="n5"
+                            onPress={() => router.push("/add-review" as never)}
+                            style={[st.ctaBtn, { backgroundColor: "rgba(255,255,255,0.12)", marginTop: 10, borderWidth: 1, borderColor: colors.primary + "55" }]}
+                          >
+                            <Text style={[st.ctaBtnText, { color: colors.primary }]}>Create New Customer</Text>
+                          </Pressable>
+                        ) : (
+                          <Pressable
+                            key="n5b"
+                            onPress={() => router.push("/select-account" as never)}
+                            style={[st.ctaBtn, { backgroundColor: colors.primary, marginTop: 10 }]}
+                          >
+                            <Text style={st.ctaBtnText}>Sign in to create a customer</Text>
+                          </Pressable>
+                        ),
                       ]}
                     </View>
                   ) : null,

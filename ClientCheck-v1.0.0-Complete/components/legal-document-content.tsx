@@ -94,11 +94,11 @@ const DOCUMENTS: Record<LegalDocType, DocDef> = {
       },
       {
         heading: "6. Disputes & Review Integrity",
-        body: "Customers and other affected parties may submit disputes regarding content they believe is inaccurate, misleading, or defamatory. Dispute submission may require an active paid membership.\n\nClientCheck will review disputes internally and may take actions including but not limited to: requesting additional information from the original reviewer, adding context to the review, modifying the content, or removing the content entirely.\n\nDisputes may trigger contractor verification checks. If the original reviewer's identity or credentials cannot be verified, the associated content may be removed.\n\nClientCheck's dispute decisions are final and not subject to appeal, except in cases involving new evidence not previously considered.",
+        body: "Customers and other affected parties may submit disputes regarding content they believe is inaccurate, misleading, or defamatory. Customers can view and respond for free; dispute filing may use pay-per-dispute or other optional tools as described at checkout.\n\nClientCheck will review disputes internally and may take actions including but not limited to: requesting additional information from the original reviewer, adding context to the review, modifying the content, or removing the content entirely.\n\nDisputes may trigger contractor verification checks. If the original reviewer's identity or credentials cannot be verified, the associated content may be removed.\n\nClientCheck's dispute decisions are final and not subject to appeal, except in cases involving new evidence not previously considered.",
       },
       {
         heading: "7. Membership & Payments",
-        body: "Certain features of the Platform require a paid membership or subscription. Current pricing includes:\n\n• Contractor Access: $100.00 per year (or free for 12 months with a verified contractor license)\n• Customer Membership: $9.99 per month\n\nAll payments are processed securely through Stripe, our third-party payment processor. ClientCheck does not store complete credit card numbers or sensitive payment information.\n\nSubscriptions automatically renew at the end of each billing period unless cancelled before the renewal date. You may cancel your subscription at any time through your account settings.\n\nRefunds are handled on a case-by-case basis. ClientCheck is not obligated to provide refunds for partial billing periods.",
+        body: "Certain features require a paid plan or optional add-on. Current pricing (subject to change) includes:\n\n• Contractors: Free tier with limited searches; Contractor Pro at $19/month or $149/year for unlimited search, risk scores, red flags, and alerts.\n• Customers: Free to view and respond; pay-per-dispute and optional monitoring or identity tools may be offered separately.\n\nAll payments are processed securely through Stripe, our third-party payment processor. ClientCheck does not store complete credit card numbers or sensitive payment information.\n\nPaid plans may renew at the end of each billing period unless cancelled before the renewal date. You may cancel eligible subscriptions through your account settings.\n\nRefunds are handled on a case-by-case basis. ClientCheck is not obligated to provide refunds for partial billing periods.",
       },
       {
         heading: "8. Platform Integrity & Moderation",
@@ -208,7 +208,7 @@ const DOCUMENTS: Record<LegalDocType, DocDef> = {
       },
       {
         heading: "1. Eligibility",
-        body: "Only registered account holders may submit disputes. Customer membership ($9.99/month) may be required to submit dispute requests.\n\nDisputes must be submitted within 90 days of the content's original publication date.",
+        body: "Only registered account holders may submit disputes. Customers can view and respond for free; dispute submission may be offered on a pay-per-dispute basis, and optional monitoring or identity tools may be available separately.\n\nDisputes must be submitted within 90 days of the content's original publication date.",
       },
       {
         heading: "2. Valid Reasons for Dispute",

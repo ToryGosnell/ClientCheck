@@ -25,6 +25,7 @@ import { initManusRuntime, subscribeSafeAreaInsets } from "@/lib/_core/manus-run
 import { CallDetectionProvider } from "@/lib/call-detection-context";
 import { CallDetectionWrapper } from "@/components/call-detection-wrapper";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { AdminPreviewBanner } from "@/components/admin-preview-banner";
 import { hydrateUserDataFromDevice } from "@/lib/user-data";
 
 const publishableKey = process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "";
@@ -33,7 +34,18 @@ const sentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN ?? "";
 if (sentryDsn) {
   Sentry.init({
     dsn: sentryDsn,
-    tracesSampleRate: 0.2,
+    // https://docs.sentry.io/platforms/react-native/data-management/data-collected/
+    sendDefaultPii: true,
+    // Learn more:
+    // https://docs.sentry.io/platforms/react-native/configuration/options/#traces-sample-rate
+    tracesSampleRate: 1.0,
+    enableLogs: true,
+    // profilesSampleRate is relative to tracesSampleRate.
+    profilesSampleRate: 1.0,
+    // Record session replays for 100% of errors and 10% of sessions.
+    replaysOnErrorSampleRate: 1.0,
+    replaysSessionSampleRate: 0.1,
+    integrations: [Sentry.mobileReplayIntegration()],
   });
 }
 
@@ -108,6 +120,7 @@ function RootLayout() {
         <trpc.Provider client={trpcClient} queryClient={queryClient}>
           <QueryClientProvider client={queryClient}>
             <CallDetectionProvider>
+            <AdminPreviewBanner />
             {/* Default to hiding native headers so raw route segments don't appear (e.g. "(tabs)", "products/[id]"). */}
             {/* If a screen needs the native header, explicitly enable it and set a human title via Stack.Screen options. */}
             {/* in order for ios apps tab switching to work properly, use presentation: "fullScreenModal" for login page, whenever you decide to use presentation: "modal*/}
@@ -117,8 +130,11 @@ function RootLayout() {
               <Stack.Screen name="add-review" options={{ presentation: "modal" }} />
               <Stack.Screen name="dispute-response" options={{ presentation: "modal" }} />
               <Stack.Screen name="customer/[id]" />
+              <Stack.Screen name="c/[customerId]" />
               <Stack.Screen name="review/[id]" />
               <Stack.Screen name="select-account" />
+              <Stack.Screen name="invite" />
+              <Stack.Screen name="pricing" />
               <Stack.Screen name="subscription" />
               <Stack.Screen name="contractor-paywall" />
               <Stack.Screen name="customer-paywall" />
@@ -170,5 +186,5 @@ function RootLayout() {
   );
 }
 
-// Wrap root with Sentry for unhandled error capture (when DSN is set)
-export default sentryDsn ? Sentry.wrap(RootLayout) : RootLayout;
+// Wrap root with Sentry for unhandled error capture.
+export default Sentry.wrap(RootLayout);

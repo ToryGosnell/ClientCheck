@@ -3,12 +3,21 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { ScreenBackground } from "@/components/screen-background";
 import { useColors } from "@/hooks/use-colors";
+import { useAuth } from "@/hooks/use-auth";
 import { track } from "@/lib/analytics";
 
 export default function UnlockProfileScreen() {
   const router = useRouter();
   const colors = useColors();
+  const { user, loading } = useAuth();
   const { name, rating, risk } = useLocalSearchParams<{ name?: string; rating?: string; risk?: string }>();
+
+  useEffect(() => {
+    if (loading) return;
+    if (user?.role === "admin") {
+      router.replace("/(tabs)" as never);
+    }
+  }, [loading, user?.role, router]);
 
   useEffect(() => {
     track("paywall_viewed", { surface: "unlock" });
@@ -76,7 +85,7 @@ export default function UnlockProfileScreen() {
           <View style={s.optionBadge}><Text style={s.optionBadgeText}>Recommended</Text></View>
           <Text style={s.optionIcon}>🛡️</Text>
           <Text style={s.optionTitle}>Contractor · verify license</Text>
-          <Text style={s.optionDesc}>12 months free full access, then $120/year — no card to start</Text>
+          <Text style={s.optionDesc}>Free tier with limited searches; Pro $19/mo or $149/yr — no card to start free tier</Text>
         </Pressable>
 
         <Pressable
@@ -85,7 +94,7 @@ export default function UnlockProfileScreen() {
         >
           <Text style={s.optionIcon}>💳</Text>
           <Text style={s.optionTitle}>Contractor · continue without license</Text>
-          <Text style={s.optionDesc}>Paid path for full platform access when verification is not an option</Text>
+          <Text style={s.optionDesc}>Paid Pro path when you want unlimited search and full risk tools without license verification</Text>
         </Pressable>
 
         <View style={[s.divider, { marginTop: 24 }]} />
@@ -93,16 +102,19 @@ export default function UnlockProfileScreen() {
         <Text style={s.optionHeader}>For Customers</Text>
 
         <Pressable
-          onPress={() => router.push("/customer-paywall" as never)}
+          onPress={() => router.push({ pathname: "/select-account", params: { preset: "customer" } } as never)}
           style={({ pressed }) => [s.optionCard, s.optionSecondary, pressed && { opacity: 0.85 }]}
         >
           <Text style={s.optionIcon}>👤</Text>
-          <Text style={s.optionTitle}>Customer · respond & dispute</Text>
-          <Text style={s.optionDesc}>Free customer accounts; paid options apply where required for disputes (see checkout)</Text>
+          <Text style={s.optionTitle}>Customer · free account</Text>
+          <Text style={s.optionDesc}>
+            Sign in for a free account: your profile, your reviews, responses, and disputes. Optional identity badge is
+            available later from billing — never required for core access.
+          </Text>
         </Pressable>
 
         <Text style={s.footerNote}>
-          Preview stays free · Unlock when you need full contractor insights or customer dispute tools
+          Preview stays free · Contractors unlock full insights; customers use a free account (optional badge add-on only)
         </Text>
       </ScrollView>
     </ScreenBackground>

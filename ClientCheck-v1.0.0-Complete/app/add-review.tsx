@@ -16,9 +16,10 @@ import {
 import { ScreenContainer } from "@/components/screen-container";
 import { ScreenBackground } from "@/components/screen-background";
 import { StarRating } from "@/components/star-rating";
-import { CategoryRating } from "@/components/category-rating";
+import { CategoryRating, type CategoryRatingValue } from "@/components/category-rating";
 import { FlagChipsSection } from "@/components/red-flag-chip";
 import { LegalDisclaimerModal } from "@/components/legal-disclaimer-modal";
+import { CustomerIdentityVerifiedBadge, CustomerNameWithVerifiedBadge } from "@/components/customer-identity-verified-badge";
 import { useColors } from "@/hooks/use-colors";
 import { TRPCClientError } from "@trpc/client";
 import { trpc } from "@/lib/trpc";
@@ -43,6 +44,13 @@ import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { Platform as RNPlatform } from "react-native";
 import { track } from "@/lib/analytics";
+import { useAuth } from "@/hooks/use-auth";
+import { ReviewShareGrowthModal } from "@/components/review-share-growth-modal";
+
+function paramStr(v: string | string[] | undefined): string {
+  if (v == null) return "";
+  return Array.isArray(v) ? (typeof v[0] === "string" ? v[0] : "") : v;
+}
 
 interface SelectedPhoto {
   uri: string;
@@ -53,13 +61,26 @@ interface SelectedPhoto {
 export default function AddReviewScreen() {
   const router = useRouter();
   const colors = useColors();
+  const { user } = useAuth();
   const params = useLocalSearchParams<{
-    customerId?: string;
-    customerName?: string;
+    customerId?: string | string[];
+    customerName?: string | string[];
+    fromProfile?: string | string[];
   }>();
 
-  const existingCustomerId = params.customerId ? parseInt(params.customerId, 10) : null;
-  const existingCustomerName = params.customerName ?? "";
+  const parsedCustomerIdFromRoute = useMemo(() => {
+    const raw = paramStr(params.customerId);
+    if (!raw) return null;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n : null;
+  }, [params.customerId]);
+
+  const fromProfile =
+    paramStr(params.fromProfile) === "1" ||
+    paramStr(params.fromProfile).toLowerCase() === "true";
+
+  const existingCustomerId = parsedCustomerIdFromRoute;
+  const existingCustomerName = paramStr(params.customerName);
 
   // Customer search state
   const [searchQuery, setSearchQuery] = useState("");
@@ -67,6 +88,9 @@ export default function AddReviewScreen() {
   const [selectedCustomerName, setSelectedCustomerName] = useState(existingCustomerName);
   const [showSearch, setShowSearch] = useState(!existingCustomerId);
   const [showNewCustomerForm, setShowNewCustomerForm] = useState(false);
+  /** When opened from customer profile (`fromProfile`), hide "Change" until user explicitly opts out. */
+  const [profileLockDismissed, setProfileLockDismissed] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // New customer fields
   const [newFirstName, setNewFirstName] = useState("");
@@ -130,6 +154,17 @@ export default function AddReviewScreen() {
     if (showNewCustomerForm) triggerMatchLookup();
   }, [newFirstName, newLastName, newPhone, newEmail, newCity, newState, triggerMatchLookup, showNewCustomerForm]);
 
+  useEffect(() => {
+    if (parsedCustomerIdFromRoute == null) return;
+    setSelectedCustomerId(parsedCustomerIdFromRoute);
+    setSelectedCustomerName(paramStr(params.customerName));
+    setShowSearch(false);
+    setProfileLockDismissed(false);
+  }, [parsedCustomerIdFromRoute, params.customerName]);
+
+  const isProfileCustomerLocked =
+    fromProfile && parsedCustomerIdFromRoute != null && !profileLockDismissed;
+
   // Review fields
   const [categoryRatings, setCategoryRatings] = useState<ReviewCategoryRatings>(
     emptyCategoryRatings(),
@@ -143,7 +178,8 @@ export default function AddReviewScreen() {
     [categoryRatings],
   );
   const overallRating = useMemo(
-    () => getFinalOverallRating(categoryRatings, wouldWorkAgain, selectedRedFlags, selectedGreenFlags),
+    (): number | null =>
+      getFinalOverallRating(categoryRatings, wouldWorkAgain, selectedRedFlags, selectedGreenFlags),
     [categoryRatings, wouldWorkAgain, selectedRedFlags, selectedGreenFlags],
   );
   const overallRatingExplanation = useMemo(
@@ -159,6 +195,10 @@ export default function AddReviewScreen() {
   // Legal disclaimer state
   const [showLegalModal, setShowLegalModal] = useState(false);
   const [hasAgreedToTerms, setHasAgreedToTerms] = useState(false);
+  /** True for entire submit path including photo uploads after `reviews.create`. */
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [shareModalContext, setShareModalContext] = useState<{ customerId: number; label: string } | null>(null);
 
   // API
   const { data: searchResults } = trpc.customers.search.useQuery(
@@ -169,34 +209,50 @@ export default function AddReviewScreen() {
   const utils = trpc.useUtils();
   const addReviewPhotos = trpc.reviews.addPhotos.useMutation();
   const createReview = trpc.reviews.create.useMutation({
-    onSuccess: (_data, variables) => {
+    onSuccess: async (_data, variables) => {
       track("review_created", { customer_id: variables.customerId, overall_rating: variables.overallRating });
+      track("review_submitted", { customer_id: variables.customerId, overall_rating: variables.overallRating });
+      const cid = variables.customerId;
+      try {
+        await Promise.all([
+          utils.customers.search.invalidate(),
+          utils.reviews.getMyReviews.invalidate(),
+          utils.reviews.getRecent.invalidate(),
+          utils.reviews.getForCustomer.invalidate({ customerId: cid }),
+          utils.customers.getById.invalidate({ id: cid }),
+          utils.customers.getReviews.invalidate({ customerId: cid }),
+          utils.customers.getScore.invalidate({ customerId: cid }),
+          utils.customers.getFlagged.invalidate(),
+          utils.customers.getTopRated.invalidate(),
+        ]);
+      } catch (e) {
+        console.warn("[add-review] cache invalidate after review create", e);
+      }
       if (RNPlatform.OS !== "web") {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
-      Alert.alert("Review Submitted", "Your review has been posted successfully.", [
-        { text: "OK", onPress: () => router.back() },
-      ]);
-    },
-    onError: (err) => {
-      Alert.alert("Error", err.message || "Failed to submit review.");
     },
   });
 
   // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-  const setCatScore = (key: ReviewCategoryKey, score: number) => {
+  const setCategoryValue = (key: ReviewCategoryKey, v: CategoryRatingValue) => {
     setCategoryRatings((prev) => ({
       ...prev,
-      [key]: { score: score || null, notApplicable: false },
+      [key]:
+        v === null
+          ? { score: null, notApplicable: true }
+          : v === undefined
+            ? { score: null, notApplicable: false }
+            : { score: v, notApplicable: false },
     }));
   };
 
-  const setCatNa = (key: ReviewCategoryKey, na: boolean) => {
-    setCategoryRatings((prev) => ({
-      ...prev,
-      [key]: na ? { score: null, notApplicable: true } : { score: null, notApplicable: false },
-    }));
+  const categoryUiValue = (key: ReviewCategoryKey): CategoryRatingValue => {
+    const c = categoryRatings[key];
+    if (c.notApplicable) return null;
+    if (c.score != null && c.score >= 1 && c.score <= 5) return c.score as 1 | 2 | 3 | 4 | 5;
+    return undefined;
   };
 
   const toggleRedFlag = (flag: string) => {
@@ -229,7 +285,7 @@ export default function AddReviewScreen() {
     setNewZip("");
   };
 
-  const handleCreateAndSelect = async () => {
+  const handleCreateCustomer = async () => {
     if (!newFirstName.trim() || !newLastName.trim()) {
       Alert.alert("Required", "Please enter the customer's first and last name.");
       return;
@@ -268,12 +324,14 @@ export default function AddReviewScreen() {
         firstName: newFirstName.trim(),
         lastName: newLastName.trim(),
         phone: newPhone.trim(),
-        email: newEmail.trim() || undefined,
+        email: newEmail.trim() ? newEmail.trim().toLowerCase() : undefined,
         address: newAddress.trim(),
         city: newCity.trim(),
-        state: newState.trim(),
+        state: newState.trim().toUpperCase(),
         zip: newZip.trim(),
       });
+
+      await utils.customers.search.invalidate();
 
       if ((result as any).isDuplicate) {
         handleSelectCustomer((result as any).id, `${newFirstName} ${newLastName}`);
@@ -304,8 +362,13 @@ export default function AddReviewScreen() {
         handleSelectCustomer(id as number, `${newFirstName} ${newLastName}`);
         setShowNewCustomerForm(false);
         resetNewCustomerForm();
+        Alert.alert(
+          "Customer created",
+          `${newFirstName.trim()} ${newLastName.trim()} is now selected for this review.`,
+        );
       }
     } catch (e: unknown) {
+      console.error("[add-review] customers.create failed", e);
       let message = "Failed to create customer.";
       if (e instanceof TRPCClientError) {
         const code = e.data?.code;
@@ -354,87 +417,245 @@ export default function AddReviewScreen() {
 
   // ─── Validation + Submit ──────────────────────────────────────────────────────
 
-  const canSubmit = (() => {
-    if (!selectedCustomerId) return false;
-    if (wouldWorkAgain !== "no" && (calculatedOverallRating == null || calculatedOverallRating === 0)) return false;
+  const canSubmit = useMemo(() => {
+    const hasCustomer =
+      selectedCustomerId != null ||
+      (newFirstName.trim().length > 0 &&
+        newLastName.trim().length > 0 &&
+        newCity.trim().length > 0 &&
+        newState.trim().length > 0 &&
+        newZip.trim().length > 0);
+    if (!hasCustomer) return false;
+    if (wouldWorkAgain !== "no" && calculatedOverallRating == null) return false;
     const errs = validateReviewRatings({
       overallRating,
       categories: categoryRatings,
       wouldWorkAgain,
     });
     return errs.length === 0;
-  })();
+  }, [
+    selectedCustomerId,
+    newFirstName,
+    newLastName,
+    newCity,
+    newState,
+    newZip,
+    wouldWorkAgain,
+    calculatedOverallRating,
+    overallRating,
+    categoryRatings,
+  ]);
 
-  const handleSubmit = async () => {
+  const showClassicSuccessAlert = (postedForId: number, postedForName: string) => {
+    Alert.alert("Review submitted successfully.", "Your feedback is now on this customer's profile.", [
+      {
+        text: "View profile",
+        onPress: () => router.replace(`/customer/${postedForId}?from=search` as never),
+      },
+      {
+        text: "Back to Search",
+        style: "cancel",
+        onPress: () => router.replace("/(tabs)/search" as never),
+      },
+      {
+        text: "Leave another review",
+        onPress: () => {
+          setSelectedCustomerId(postedForId);
+          setSelectedCustomerName(postedForName);
+          setShowSearch(false);
+          setProfileLockDismissed(true);
+          setHasAgreedToTerms(false);
+        },
+      },
+    ]);
+  };
+
+  const resetReviewForm = () => {
+    setCategoryRatings(emptyCategoryRatings());
+    setWouldWorkAgain("na");
+    setSelectedRedFlags([]);
+    setSelectedGreenFlags([]);
+    setReviewText("");
+    setJobType("");
+    setJobDate("");
+    setJobAmount("");
+    setSelectedPhotos([]);
+    setHasAgreedToTerms(false);
+  };
+
+  const handleSubmitReview = async () => {
+    if (isSubmitting || createReview.isPending) return;
     if (!hasAgreedToTerms) {
       setShowLegalModal(true);
       return;
     }
-    if (!selectedCustomerId) {
-      Alert.alert("Select Customer", "Please select or create a customer first.");
+
+    setSubmitError(null);
+
+    if (
+      isProfileCustomerLocked &&
+      parsedCustomerIdFromRoute != null &&
+      selectedCustomerId !== parsedCustomerIdFromRoute
+    ) {
+      setSubmitError("Customer selection does not match the profile you opened. Tap “Change customer” to switch.");
       return;
     }
 
-    const errs = validateReviewRatings({
-      overallRating,
-      categories: categoryRatings,
-      wouldWorkAgain,
-    });
-    if (errs.length > 0) {
-      Alert.alert("Missing Info", errs[0].message);
-      return;
-    }
+    setIsSubmitting(true);
+    let customerId = selectedCustomerId;
 
-    const legacyFlat = categoriesToLegacyFlat(categoryRatings);
-    const categoryDataJson = serializeNewCategories(categoryRatings, wouldWorkAgain, selectedRedFlags, selectedGreenFlags);
-    const flagsJson = (selectedRedFlags.length > 0 || selectedGreenFlags.length > 0)
-      ? serializeFlags(selectedRedFlags, selectedGreenFlags)
-      : undefined;
-
-    const { reviewId } = await createReview.mutateAsync({
-      customerId: selectedCustomerId,
-      overallRating,
-      calculatedOverallRating: calculatedOverallRating ?? undefined,
-      ratingPaymentReliability: legacyFlat.ratingPaymentReliability,
-      ratingCommunication: legacyFlat.ratingCommunication,
-      ratingScopeChanges: legacyFlat.ratingScopeChanges,
-      ratingPropertyRespect: legacyFlat.ratingPropertyRespect,
-      ratingPermitPulling: legacyFlat.ratingPermitPulling,
-      ratingOverallJobExperience: legacyFlat.ratingOverallJobExperience,
-      categoryDataJson,
-      wouldWorkAgain: wouldWorkAgain as string,
-      reviewText: reviewText.trim() || undefined,
-      jobType: jobType.trim() || undefined,
-      jobDate: jobDate.trim() || undefined,
-      jobAmount: jobAmount.trim() || undefined,
-      redFlags: flagsJson,
-      greenFlags: flagsJson ? undefined : undefined,
-    });
-
-    if (selectedPhotos.length > 0 && reviewId) {
-      const publicUrls: string[] = [];
-      for (let i = 0; i < selectedPhotos.length; i++) {
-        try {
-          const { presignedUrl, publicUrl } = await utils.photos.getPresignedUrl.fetch({
-            reviewId,
-            photoIndex: i,
+    try {
+      if (customerId == null) {
+        if (!newFirstName.trim() || !newLastName.trim()) {
+          Alert.alert("Select Customer", "Please select a customer or complete new customer name fields.");
+          return;
+        }
+        if (!newCity.trim() || !newState.trim() || !newZip.trim()) {
+          Alert.alert("Required", "City, state, and ZIP code are required to create a customer.");
+          return;
+        }
+        if (!newPhone.trim()) {
+          const shouldContinue = await new Promise<boolean>((resolve) => {
+            Alert.alert(
+              "Phone Number Recommended",
+              "Phone numbers help prevent duplicate customer records. Are you sure you want to continue?",
+              [
+                { text: "Cancel", onPress: () => resolve(false), style: "cancel" },
+                {
+                  text: "Continue Without Phone",
+                  onPress: () => resolve(true),
+                  style: "destructive",
+                },
+              ],
+            );
           });
-          const photo = selectedPhotos[i];
-          const res = await fetch(photo.uri);
-          const blob = await res.blob();
-          await fetch(presignedUrl, {
-            method: "PUT",
-            body: blob,
-            headers: { "Content-Type": photo.type || "image/jpeg" },
-          });
-          publicUrls.push(publicUrl);
-        } catch (e) {
-          console.warn("Photo upload failed for index", i, e);
+          if (!shouldContinue) return;
+        }
+
+        const result = await createCustomer.mutateAsync({
+          firstName: newFirstName.trim(),
+          lastName: newLastName.trim(),
+          phone: newPhone.trim(),
+          email: newEmail.trim() ? newEmail.trim().toLowerCase() : undefined,
+          address: newAddress.trim(),
+          city: newCity.trim(),
+          state: newState.trim().toUpperCase(),
+          zip: newZip.trim(),
+          forceCreate: true,
+        });
+        await utils.customers.search.invalidate();
+        const id = (result as { id?: number }).id;
+        if (id == null) {
+          throw new Error("Customer was not created");
+        }
+        customerId = id;
+        handleSelectCustomer(customerId, `${newFirstName.trim()} ${newLastName.trim()}`);
+        setShowNewCustomerForm(false);
+        resetNewCustomerForm();
+      }
+
+      if (customerId == null) {
+        Alert.alert("Select Customer", "Please select or create a customer first.");
+        return;
+      }
+
+      const errs = validateReviewRatings({
+        overallRating,
+        categories: categoryRatings,
+        wouldWorkAgain,
+      });
+      if (errs.length > 0) {
+        Alert.alert("Missing Info", errs[0].message);
+        return;
+      }
+
+      if (overallRating == null && wouldWorkAgain !== "no") {
+        Alert.alert("Missing Info", "Rate at least one category to generate an overall rating.");
+        return;
+      }
+
+      const legacyFlat = categoriesToLegacyFlat(categoryRatings);
+      const categoryDataJson = serializeNewCategories(
+        categoryRatings,
+        wouldWorkAgain,
+        selectedRedFlags,
+        selectedGreenFlags,
+      );
+      const flagsJson =
+        selectedRedFlags.length > 0 || selectedGreenFlags.length > 0
+          ? serializeFlags(selectedRedFlags, selectedGreenFlags)
+          : undefined;
+
+      const created = await createReview.mutateAsync({
+        customerId,
+        overallRating: overallRating as number,
+        calculatedOverallRating: calculatedOverallRating ?? undefined,
+        ratingPaymentReliability: legacyFlat.ratingPaymentReliability,
+        ratingCommunication: legacyFlat.ratingCommunication,
+        ratingScopeChanges: legacyFlat.ratingScopeChanges,
+        ratingPropertyRespect: legacyFlat.ratingPropertyRespect,
+        ratingPermitPulling: legacyFlat.ratingPermitPulling,
+        ratingOverallJobExperience: legacyFlat.ratingOverallJobExperience,
+        categoryDataJson,
+        wouldWorkAgain: wouldWorkAgain as string,
+        reviewText: reviewText.trim() || undefined,
+        jobType: jobType.trim() || undefined,
+        jobDate: jobDate.trim() || undefined,
+        jobAmount: jobAmount.trim() || undefined,
+        redFlags: flagsJson,
+        greenFlags: undefined,
+      });
+      const reviewId =
+        created && typeof created === "object" && "reviewId" in created
+          ? (created as { reviewId: number }).reviewId
+          : created && typeof created === "object" && "id" in created
+            ? (created as { id: number }).id
+            : undefined;
+
+      if (selectedPhotos.length > 0 && reviewId != null) {
+        const publicUrls: string[] = [];
+        for (let i = 0; i < selectedPhotos.length; i++) {
+          try {
+            const { presignedUrl, publicUrl } = await utils.photos.getPresignedUrl.fetch({
+              reviewId,
+              photoIndex: i,
+            });
+            const photo = selectedPhotos[i];
+            const res = await fetch(photo.uri);
+            const blob = await res.blob();
+            await fetch(presignedUrl, {
+              method: "PUT",
+              body: blob,
+              headers: { "Content-Type": photo.type || "image/jpeg" },
+            });
+            publicUrls.push(publicUrl);
+          } catch (e) {
+            console.warn("[add-review] Photo upload failed for index", i, e);
+          }
+        }
+        if (publicUrls.length > 0) {
+          await addReviewPhotos.mutateAsync({ reviewId, photoUrls: publicUrls });
         }
       }
-      if (publicUrls.length > 0) {
-        await addReviewPhotos.mutateAsync({ reviewId, photoUrls: publicUrls });
+
+      resetReviewForm();
+      const postedForId = customerId;
+      const postedForName = selectedCustomerName;
+      if (user?.id) {
+        setShareModalContext({ customerId: postedForId, label: postedForName });
+        setShareModalOpen(true);
+      } else {
+        showClassicSuccessAlert(postedForId, postedForName);
       }
+    } catch (e: unknown) {
+      console.error("[add-review] submit flow failed", e);
+      let message = "Could not complete this step. Please try again.";
+      if (e instanceof TRPCClientError && e.message) message = e.message;
+      else if (e instanceof Error && e.message) message = e.message;
+      setSubmitError(message);
+      Alert.alert("Submit failed", message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -458,6 +679,59 @@ export default function AddReviewScreen() {
         onDisagree={() => setShowLegalModal(false)}
       />
 
+      {shareModalContext && user?.id ? (
+        <ReviewShareGrowthModal
+          visible={shareModalOpen}
+          customerId={shareModalContext.customerId}
+          sharerUserId={user.id}
+          customerLabel={shareModalContext.label}
+          onClose={() => {
+            setShareModalOpen(false);
+            setShareModalContext(null);
+          }}
+          onViewProfile={() => {
+            setShareModalOpen(false);
+            setShareModalContext(null);
+            router.replace(`/customer/${shareModalContext.customerId}?from=search` as never);
+          }}
+          onBackToSearch={() => {
+            setShareModalOpen(false);
+            setShareModalContext(null);
+            router.replace("/(tabs)/search" as never);
+          }}
+          onLeaveAnother={() => {
+            setShareModalOpen(false);
+            const id = shareModalContext.customerId;
+            const name = shareModalContext.label;
+            setShareModalContext(null);
+            setSelectedCustomerId(id);
+            setSelectedCustomerName(name);
+            setShowSearch(false);
+            setProfileLockDismissed(true);
+            setHasAgreedToTerms(false);
+          }}
+        />
+      ) : null}
+
+      {submitError ? (
+        <View
+          style={{
+            marginHorizontal: 16,
+            marginTop: 8,
+            padding: 12,
+            borderRadius: 10,
+            borderWidth: 1,
+            borderColor: colors.error + "66",
+            backgroundColor: colors.error + "12",
+          }}
+        >
+          <Text style={{ color: colors.error, fontSize: 14, fontWeight: "600" }}>{submitError}</Text>
+          <Pressable onPress={() => setSubmitError(null)} style={{ marginTop: 8 }}>
+            <Text style={{ color: colors.primary, fontSize: 13, fontWeight: "600" }}>Dismiss</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
       <View style={[styles.topBar, { borderBottomColor: colors.border }]}>
         <Pressable
           onPress={() => router.back()}
@@ -467,11 +741,11 @@ export default function AddReviewScreen() {
         </Pressable>
         <Text style={[styles.topTitle, { color: colors.foreground }]}>Add Review</Text>
         <Pressable
-          onPress={handleSubmit}
-          disabled={createReview.isPending || !canSubmit}
+          onPress={() => void handleSubmitReview()}
+          disabled={isSubmitting || createReview.isPending || createCustomer.isPending || !canSubmit}
           style={({ pressed }) => [styles.submitBtn, pressed && { opacity: 0.7 }]}
         >
-          {createReview.isPending ? (
+          {isSubmitting || createReview.isPending ? (
             <ActivityIndicator color={colors.primary} size="small" />
           ) : (
             <Text
@@ -498,25 +772,59 @@ export default function AddReviewScreen() {
             <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Customer</Text>
 
             {selectedCustomerId && !showSearch ? (
-              <View style={styles.selectedCustomer}>
-                <View style={[styles.selectedAvatar, { backgroundColor: colors.primary }]}>
-                  <Text style={styles.selectedAvatarText}>
-                    {selectedCustomerName[0]?.toUpperCase() ?? "?"}
-                  </Text>
-                </View>
-                <Text style={[styles.selectedName, { color: colors.foreground }]}>
-                  {selectedCustomerName}
-                </Text>
-                <Pressable
-                  onPress={() => {
-                    setSelectedCustomerId(null);
-                    setSelectedCustomerName("");
-                    setShowSearch(true);
-                  }}
-                  style={({ pressed }) => [pressed && { opacity: 0.6 }]}
+              <View style={{ gap: 10 }}>
+                <View
+                  style={[
+                    styles.reviewingBanner,
+                    { backgroundColor: colors.primary + "14", borderColor: colors.primary + "44" },
+                  ]}
                 >
-                  <Text style={[styles.changeText, { color: colors.primary }]}>Change</Text>
-                </Pressable>
+                  <Text style={[styles.reviewingBannerLabel, { color: colors.muted }]}>
+                    Reviewing
+                  </Text>
+                  <Text style={[styles.reviewingBannerName, { color: colors.foreground }]}>
+                    {selectedCustomerName}
+                  </Text>
+                  {isProfileCustomerLocked ? (
+                    <Text style={[styles.reviewingBannerHint, { color: colors.muted }]}>
+                      Opened from this customer&apos;s profile — customer is locked unless you change it below.
+                    </Text>
+                  ) : null}
+                </View>
+                <View style={styles.selectedCustomer}>
+                  <View style={[styles.selectedAvatar, { backgroundColor: colors.primary }]}>
+                    <Text style={styles.selectedAvatarText}>
+                      {selectedCustomerName[0]?.toUpperCase() ?? "?"}
+                    </Text>
+                  </View>
+                  <Text style={[styles.selectedName, { color: colors.foreground }]}>
+                    {selectedCustomerName}
+                  </Text>
+                  {isProfileCustomerLocked ? (
+                    <Pressable
+                      onPress={() => {
+                        setProfileLockDismissed(true);
+                        setSelectedCustomerId(null);
+                        setSelectedCustomerName("");
+                        setShowSearch(true);
+                      }}
+                      style={({ pressed }) => [pressed && { opacity: 0.6 }]}
+                    >
+                      <Text style={[styles.changeText, { color: colors.primary }]}>Change customer</Text>
+                    </Pressable>
+                  ) : (
+                    <Pressable
+                      onPress={() => {
+                        setSelectedCustomerId(null);
+                        setSelectedCustomerName("");
+                        setShowSearch(true);
+                      }}
+                      style={({ pressed }) => [pressed && { opacity: 0.6 }]}
+                    >
+                      <Text style={[styles.changeText, { color: colors.primary }]}>Change</Text>
+                    </Pressable>
+                  )}
+                </View>
               </View>
             ) : (
               <>
@@ -549,9 +857,12 @@ export default function AddReviewScreen() {
                           pressed && { opacity: 0.6 },
                         ]}
                       >
-                        <Text style={[styles.searchResultText, { color: colors.foreground }]}>
-                          {c.firstName} {c.lastName}
-                        </Text>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <Text style={[styles.searchResultText, { color: colors.foreground }]}>
+                            {c.firstName} {c.lastName}
+                          </Text>
+                          {c.identityVerified ? <CustomerIdentityVerifiedBadge size="sm" /> : null}
+                        </View>
                         <Text style={[styles.searchResultSubtext, { color: colors.muted }]}>
                           {[c.city, c.state].filter(Boolean).join(", ")}
                           {c.reviewCount > 0 ? ` · ${c.reviewCount} reviews` : ""}
@@ -588,9 +899,12 @@ export default function AddReviewScreen() {
                     {potentialMatches.map((match: any) => (
                       <View key={match.id} style={[styles.matchCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
                         <View style={{ flex: 1 }}>
-                          <Text style={[styles.matchCardName, { color: colors.foreground }]}>
-                            {match.firstName} {match.lastName}
-                          </Text>
+                          <CustomerNameWithVerifiedBadge
+                            firstName={match.firstName}
+                            lastName={match.lastName}
+                            identityVerified={match.identityVerified}
+                            textStyle={[styles.matchCardName, { color: colors.foreground }]}
+                          />
                           {!!(match.city || match.state) && (
                             <Text style={{ fontSize: 13, color: colors.muted }}>
                               {[match.city, match.state, match.zip].filter(Boolean).join(", ")}
@@ -722,8 +1036,8 @@ export default function AddReviewScreen() {
                     <Text style={[styles.halfBtnText, { color: colors.muted }]}>Cancel</Text>
                   </Pressable>
                   <Pressable
-                    onPress={handleCreateAndSelect}
-                    disabled={createCustomer.isPending}
+                    onPress={handleCreateCustomer}
+                    disabled={createCustomer.isPending || isSubmitting}
                     style={({ pressed }) => [
                       styles.halfBtn,
                       { backgroundColor: colors.primary },
@@ -780,21 +1094,23 @@ export default function AddReviewScreen() {
           >
             <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Overall Rating</Text>
             <View style={styles.overallRatingContainer}>
-              <StarRating rating={overallRating} size={44} positionalColors />
+              <StarRating rating={overallRating ?? 0} size={44} positionalColors />
               <Text style={[styles.overallRatingLabel, { color: colors.muted }]}>
                 {calculatedOverallRating == null
                   ? "Rate categories below to calculate"
                   : wouldWorkAgain === "no"
                     ? `0 stars (category avg: ${calculatedOverallRating.toFixed(1)})`
-                    : overallRating <= 1
+                    : overallRating != null && overallRating <= 1
                       ? "Avoid — Major Issues"
-                      : overallRating <= 2
+                      : overallRating != null && overallRating <= 2
                         ? "Poor — Many Problems"
-                        : overallRating <= 3
+                        : overallRating != null && overallRating <= 3
                           ? "Average — Some Issues"
-                          : overallRating <= 4
+                          : overallRating != null && overallRating <= 4
                             ? "Good — Minor Issues"
-                            : "Excellent — Highly Recommend"}
+                            : overallRating != null
+                              ? "Excellent — Highly Recommend"
+                              : "Rate categories below to calculate"}
               </Text>
               {overallRatingExplanation && (
                 <Text style={[styles.overrideText, { color: wouldWorkAgain === "no" ? "#DC2626" : colors.muted }]}>
@@ -819,11 +1135,9 @@ export default function AddReviewScreen() {
                 <CategoryRating
                   label={label}
                   description={description}
-                  rating={categoryRatings[key].score}
-                  notApplicable={categoryRatings[key].notApplicable}
+                  value={categoryUiValue(key)}
                   interactive
-                  onRatingChange={(r) => setCatScore(key, r)}
-                  onNotApplicableChange={(na) => setCatNa(key, na)}
+                  onValueChange={(v) => setCategoryValue(key, v)}
                 />
               </View>
             ))}
@@ -959,17 +1273,20 @@ export default function AddReviewScreen() {
           {/* ── Submit ── */}
           <View style={styles.submitContainer}>
             <Pressable
-              onPress={handleSubmit}
-              disabled={createReview.isPending || !canSubmit}
+              onPress={() => void handleSubmitReview()}
+              disabled={isSubmitting || createReview.isPending || createCustomer.isPending || !canSubmit}
               style={({ pressed }) => [
                 styles.submitFullBtn,
                 { backgroundColor: canSubmit ? colors.primary : colors.muted },
                 pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
-                createReview.isPending && { opacity: 0.6 },
+                isSubmitting && { opacity: 0.6 },
               ]}
             >
-              {createReview.isPending ? (
-                <ActivityIndicator color="#fff" />
+              {isSubmitting ? (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                  <ActivityIndicator color="#fff" />
+                  <Text style={styles.submitFullBtnText}>Submitting...</Text>
+                </View>
               ) : (
                 <Text style={styles.submitFullBtnText}>Submit Review</Text>
               )}
@@ -993,6 +1310,10 @@ const styles = StyleSheet.create({
   section: { borderRadius: 14, borderWidth: 1, padding: 16, gap: 12 },
   sectionTitle: { fontSize: 17, fontWeight: "700" },
   sectionSubtitle: { fontSize: 13, marginTop: -6 },
+  reviewingBanner: { borderRadius: 12, borderWidth: 1, padding: 12, gap: 4 },
+  reviewingBannerLabel: { fontSize: 11, fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.6 },
+  reviewingBannerName: { fontSize: 18, fontWeight: "800" },
+  reviewingBannerHint: { fontSize: 12, lineHeight: 17, marginTop: 2 },
   selectedCustomer: { flexDirection: "row", alignItems: "center", gap: 12 },
   selectedAvatar: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
   selectedAvatarText: { color: "#fff", fontSize: 16, fontWeight: "700" },

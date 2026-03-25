@@ -23,6 +23,8 @@ function createAuthContext(): { ctx: TrpcContext; clearedCookies: CookieCall[] }
     termsAcceptedAt: null,
     privacyAcceptedAt: null,
     legalAcceptanceVersion: null,
+    deletedAt: null,
+    accountStatus: "active",
     createdAt: new Date(),
     updatedAt: new Date(),
     lastSignedIn: new Date(),

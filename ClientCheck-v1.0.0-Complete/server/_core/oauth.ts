@@ -1,5 +1,6 @@
 import { COOKIE_NAME, ONE_YEAR_MS } from "../../shared/const.js";
 import type { Express, Request, Response } from "express";
+import type { MeUserJson } from "../../lib/_core/api";
 import { getUserByOpenId, upsertUser } from "../db";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
@@ -25,16 +26,30 @@ function getQueryParam(req: Request, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function getOauthPortalEntryUrl(): URL | null {
+  const trim = (s: string | undefined) => (s ?? "").trim().replace(/\/$/, "");
+  const base = trim(process.env.OAUTH_PORTAL_URL) || trim(process.env.OAUTH_SERVER_URL);
+  if (!base) return null;
+  try {
+    return new URL(`${base}/app-auth`);
+  } catch {
+    return null;
+  }
+}
+
 async function syncUser(userInfo: {
   openId?: string | null;
   name?: string | null;
   email?: string | null;
   loginMethod?: string | null;
   platform?: string | null;
-}) {
+}): Promise<{ user: NonNullable<Awaited<ReturnType<typeof getUserByOpenId>>>; isNewUser: boolean }> {
   if (!userInfo.openId) {
     throw new Error("openId missing from user info");
   }
+
+  const existing = await getUserByOpenId(userInfo.openId);
+  const isNewUser = !existing;
 
   const lastSignedIn = new Date();
   await upsertUser({
@@ -45,15 +60,32 @@ async function syncUser(userInfo: {
     lastSignedIn,
   });
   const saved = await getUserByOpenId(userInfo.openId);
-  return (
-    saved ?? {
+  const user =
+    saved ??
+    ({
       openId: userInfo.openId,
       name: userInfo.name,
       email: userInfo.email,
       loginMethod: userInfo.loginMethod ?? null,
       lastSignedIn,
+    } as NonNullable<Awaited<ReturnType<typeof getUserByOpenId>>>);
+  return { user, isNewUser };
+}
+
+const OAUTH_NEW_USER_COOKIE = "cc_oauth_new_user";
+
+function readCookieFlag(req: Request, name: string): boolean {
+  const raw = req.headers.cookie;
+  if (!raw) return false;
+  const prefix = `${name}=`;
+  const parts = raw.split(";").map((s) => s.trim());
+  for (const p of parts) {
+    if (p === name || p.startsWith(prefix)) {
+      const v = p.startsWith(prefix) ? p.slice(prefix.length) : "";
+      return v === "1" || v === "true";
     }
-  );
+  }
+  return false;
 }
 
 function buildUserResponse(
@@ -66,18 +98,62 @@ function buildUserResponse(
         loginMethod?: string | null;
         lastSignedIn?: Date | null;
       },
-) {
-  return {
-    id: (user as any)?.id ?? null,
+  extras?: { isNewUser?: boolean },
+): MeUserJson {
+  const row = user as Record<string, unknown>;
+  const verifiedAt = row.verifiedAt;
+  const base: MeUserJson = {
+    id: (user as { id?: number }).id ?? null,
     openId: user?.openId ?? null,
     name: user?.name ?? null,
     email: user?.email ?? null,
     loginMethod: user?.loginMethod ?? null,
+    role: (row.role as string | undefined) ?? null,
+    isVerified: typeof row.isVerified === "boolean" ? row.isVerified : false,
+    verifiedAt:
+      verifiedAt instanceof Date
+        ? verifiedAt.toISOString()
+        : typeof verifiedAt === "string"
+          ? verifiedAt
+          : null,
     lastSignedIn: (user?.lastSignedIn ?? new Date()).toISOString(),
   };
+  if (extras?.isNewUser) {
+    return { ...base, isNewUser: true };
+  }
+  return base;
 }
 
 export function registerOAuthRoutes(app: Express) {
+  app.get("/api/oauth/start", async (req: Request, res: Response) => {
+    const redirectUri = getQueryParam(req, "redirect_uri") ?? getQueryParam(req, "redirectUri");
+    const state = getQueryParam(req, "state");
+    const appId = getQueryParam(req, "appId") ?? process.env.VITE_APP_ID ?? "";
+    const type = getQueryParam(req, "type") ?? "signIn";
+    const accountType = getQueryParam(req, "account_type");
+
+    if (!redirectUri || !state || !appId) {
+      res.status(400).json({ error: "redirect_uri, state, and appId are required" });
+      return;
+    }
+
+    const url = getOauthPortalEntryUrl();
+    if (!url) {
+      res.status(500).json({ error: "OAuth start route is misconfigured" });
+      return;
+    }
+
+    url.searchParams.set("appId", appId);
+    url.searchParams.set("redirectUri", redirectUri);
+    url.searchParams.set("state", state);
+    url.searchParams.set("type", type);
+    if (accountType) {
+      url.searchParams.set("account_type", accountType);
+    }
+
+    res.redirect(302, url.toString());
+  });
+
   app.get("/api/oauth/callback", async (req: Request, res: Response) => {
     const code = getQueryParam(req, "code");
     const state = getQueryParam(req, "state");
@@ -90,7 +166,7 @@ export function registerOAuthRoutes(app: Express) {
     try {
       const tokenResponse = await sdk.exchangeCodeForToken(code, state);
       const userInfo = await sdk.getUserInfo(tokenResponse.accessToken);
-      await syncUser(userInfo);
+      const { isNewUser } = await syncUser(userInfo);
       const sessionToken = await sdk.createSessionToken(userInfo.openId!, {
         name: userInfo.name || "",
         expiresInMs: ONE_YEAR_MS,
@@ -98,6 +174,9 @@ export function registerOAuthRoutes(app: Express) {
 
       const cookieOptions = getSessionCookieOptions(req);
       res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+      if (isNewUser) {
+        res.cookie(OAUTH_NEW_USER_COOKIE, "1", { ...cookieOptions, maxAge: 180_000 });
+      }
 
       const frontendUrl = oauthWebSuccessRedirectUrl();
       res.redirect(302, frontendUrl);
@@ -119,7 +198,7 @@ export function registerOAuthRoutes(app: Express) {
     try {
       const tokenResponse = await sdk.exchangeCodeForToken(code, state);
       const userInfo = await sdk.getUserInfo(tokenResponse.accessToken);
-      const user = await syncUser(userInfo);
+      const { user, isNewUser } = await syncUser(userInfo);
 
       const sessionToken = await sdk.createSessionToken(userInfo.openId!, {
         name: userInfo.name || "",
@@ -131,7 +210,7 @@ export function registerOAuthRoutes(app: Express) {
 
       res.json({
         app_session_id: sessionToken,
-        user: buildUserResponse(user),
+        user: buildUserResponse(user, { isNewUser }),
       });
     } catch (error) {
       console.error("[OAuth] Mobile exchange failed", error);
@@ -145,15 +224,29 @@ export function registerOAuthRoutes(app: Express) {
     res.json({ success: true });
   });
 
-  // Get current authenticated user - works with both cookie (web) and Bearer token (mobile)
-  app.get("/api/auth/me", async (req: Request, res: Response) => {
+  /** Current user JSON — shared by `/api/auth/me` and `/api/user/me`. */
+  async function respondWithCurrentUser(req: Request, res: Response): Promise<void> {
     try {
       const user = await sdk.authenticateRequest(req);
-      res.json({ user: buildUserResponse(user) });
+      const cookieOptions = getSessionCookieOptions(req);
+      const freshSignup = readCookieFlag(req, OAUTH_NEW_USER_COOKIE);
+      const payload = buildUserResponse(user, freshSignup ? { isNewUser: true } : undefined);
+      if (freshSignup) {
+        res.clearCookie(OAUTH_NEW_USER_COOKIE, { ...cookieOptions, maxAge: 0 });
+      }
+      res.json({ user: payload });
     } catch {
       // Expected when no session exists — not an error worth logging
       res.status(401).json({ error: "Not authenticated", user: null });
     }
+  }
+
+  // Get current authenticated user - works with both cookie (web) and Bearer token (mobile)
+  app.get("/api/auth/me", (req, res) => {
+    void respondWithCurrentUser(req, res);
+  });
+  app.get("/api/user/me", (req, res) => {
+    void respondWithCurrentUser(req, res);
   });
 
   // Establish session cookie from Bearer token

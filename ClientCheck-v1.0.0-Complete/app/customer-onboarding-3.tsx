@@ -84,19 +84,14 @@ export default function CustomerOnboarding3Screen() {
             </View>
           </View>
 
-          {/* Pricing Reminder */}
+          {/* Free account + optional add-on */}
           <View className="w-full bg-blue-900/20 border border-blue-600/30 rounded-lg p-4 gap-2">
-            <Text className="text-sm font-bold text-blue-300">Simple, Fair Pricing</Text>
-            <View className="flex-row justify-between items-center">
-              <Text className="text-sm text-muted">Monthly</Text>
-              <Text className="text-lg font-bold text-foreground">$9.99/month</Text>
-            </View>
-            <View className="flex-row justify-between items-center">
-              <Text className="text-sm text-muted">Yearly</Text>
-              <Text className="text-lg font-bold text-foreground">$120/year (17% off)</Text>
-            </View>
-            <Text className="text-xs text-muted mt-2">
-              Same price as contractors. Cancel monthly plan anytime.
+            <Text className="text-sm font-bold text-blue-300">Your customer account</Text>
+            <Text className="text-sm text-muted leading-5">
+              Free: profile, your reviews, public responses, and disputes. No subscription required.
+            </Text>
+            <Text className="text-xs text-muted leading-5 mt-1">
+              Optional: paid identity verification badge from Billing later — only if you want it.
             </Text>
           </View>
 
@@ -108,7 +103,7 @@ export default function CustomerOnboarding3Screen() {
             <Pressable
               onPress={() => {
                 handlePress();
-                router.push("/customer-subscription");
+                router.push("/(tabs)");
               }}
               style={({ pressed }) => [
                 {
@@ -118,7 +113,18 @@ export default function CustomerOnboarding3Screen() {
               ]}
               className="bg-primary rounded-lg py-4 items-center"
             >
-              <Text className="text-white font-bold text-lg">Subscribe Now</Text>
+              <Text className="text-white font-bold text-lg">Continue to the app</Text>
+            </Pressable>
+
+            <Pressable
+              onPress={() => {
+                handlePress();
+                router.push("/customer-paywall");
+              }}
+              style={({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }]}
+              className="py-4 items-center"
+            >
+              <Text className="text-primary font-semibold">Optional: identity verification badge</Text>
             </Pressable>
 
             <Pressable
@@ -129,19 +135,9 @@ export default function CustomerOnboarding3Screen() {
               style={({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }]}
               className="py-4 items-center"
             >
-              <Text className="text-primary font-semibold">Learn More</Text>
+              <Text className="text-primary font-semibold">Learn more</Text>
             </Pressable>
 
-            <Pressable
-              onPress={() => {
-                handlePress();
-                router.push("/(tabs)");
-              }}
-              style={({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }]}
-              className="py-4 items-center"
-            >
-              <Text className="text-muted font-semibold">Skip for Now</Text>
-            </Pressable>
           </View>
         </View>
       </ScrollView>

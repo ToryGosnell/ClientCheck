@@ -6,7 +6,6 @@ import {
   StyleSheet,
   Alert,
   TextInput,
-  Modal,
 } from "react-native";
 import { useState, useEffect } from "react";
 import { useRouter, useLocalSearchParams } from "expo-router";
@@ -30,8 +29,6 @@ export default function DisputeReviewScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const { user } = useAuth();
-  const [showPaywall, setShowPaywall] = useState(false);
-  const [isLoadingSubscription, setIsLoadingSubscription] = useState(true);
 
   const createDisputeMutation = trpc.disputes.createDispute.useMutation();
 
@@ -41,14 +38,6 @@ export default function DisputeReviewScreen() {
       track("dispute_started", { customer_id: cid });
     }
   }, [params.customerId]);
-
-  // Check if user has active subscription
-  useEffect(() => {
-    if (!user) {
-      setShowPaywall(true);
-    }
-    setIsLoadingSubscription(false);
-  }, [user]);
 
   const disputeReasons = [
     { id: "false_information", label: "Contains False Information" },
@@ -62,13 +51,16 @@ export default function DisputeReviewScreen() {
     router.push({ pathname: "/select-account", params: { preset: "customer" } } as never);
   };
 
-  const handleSubscribeClick = () => {
-    router.push('/customer-paywall' as never);
-  };
-
   const handleSubmit = async () => {
     if (!user) {
-      setShowPaywall(true);
+      Alert.alert(
+        "Sign in required",
+        "Create a free customer account to submit a dispute.",
+        [
+          { text: "Not now", style: "cancel" },
+          { text: "Sign in", onPress: handleSignUpClick },
+        ],
+      );
       return;
     }
 
@@ -132,63 +124,34 @@ export default function DisputeReviewScreen() {
     }
   };
 
-  if (isLoadingSubscription) {
-    return (
-      <ScreenContainer>
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <Text style={{ color: colors.foreground }}>Loading...</Text>
-        </View>
-      </ScreenContainer>
-    );
-  }
-
   return (
-    <>
-      {/* Paywall Modal */}
-      <Modal
-        visible={showPaywall}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowPaywall(false)}
-      >
-        <View style={[styles.paywallContainer, { backgroundColor: colors.background }]}>
-          <View style={styles.paywallContent}>
-            <Text style={[styles.paywallTitle, { color: colors.foreground }]}>
-              {!user ? 'Sign In Required' : 'Membership Required'}
-            </Text>
-            <Text style={[styles.paywallDescription, { color: colors.muted }]}>
-              {!user
-                ? 'Create an account to submit disputes and manage your profile.'
-                : 'A $9.99/month membership is required to submit disputes.'}
-            </Text>
-            
-            <TouchableOpacity
-              style={[styles.paywallButton, { backgroundColor: colors.primary }]}
-              onPress={!user ? handleSignUpClick : handleSubscribeClick}
-            >
-              <Text style={[styles.paywallButtonText, { color: colors.background }]}>
-                {!user ? 'Sign Up' : 'Start Membership'}
-              </Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={() => {
-                setShowPaywall(false);
-                router.back();
-              }}
-            >
-              <Text style={[styles.closeButtonText, { color: colors.muted }]}>Not Now</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-      
-      <ScreenContainer>
+    <ScreenContainer>
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
+        {!user ? (
+          <View
+            style={[
+              styles.signInBanner,
+              { backgroundColor: colors.primary + "18", borderColor: colors.primary },
+            ]}
+          >
+            <Text style={[styles.signInBannerTitle, { color: colors.foreground }]}>
+              Sign in with a free customer account
+            </Text>
+            <Text style={[styles.signInBannerDesc, { color: colors.muted }]}>
+              Disputes are free. Sign in to submit this form.
+            </Text>
+            <TouchableOpacity
+              style={[styles.signInBannerBtn, { backgroundColor: colors.primary }]}
+              onPress={handleSignUpClick}
+            >
+              <Text style={[styles.signInBannerBtnText, { color: colors.background }]}>Sign in or create account</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
         <View style={styles.header}>
           <Text style={[styles.title, { color: colors.foreground }]}>
             Dispute This Review
@@ -356,50 +319,26 @@ export default function DisputeReviewScreen() {
         </TouchableOpacity>
         </ScrollView>
       </ScreenContainer>
-    </>
   );
 }
 
 const styles = StyleSheet.create({
-    paywallContainer: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  signInBanner: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 16,
+    gap: 8,
+    marginBottom: 8,
   },
-  paywallContent: {
-    padding: 20,
-    paddingBottom: 40,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-  },
-  paywallTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 12,
-  },
-  paywallDescription: {
-    fontSize: 16,
-    lineHeight: 24,
-    marginBottom: 24,
-  },
-  paywallButton: {
-    paddingVertical: 14,
-    paddingHorizontal: 20,
+  signInBannerTitle: { fontSize: 16, fontWeight: "700" },
+  signInBannerDesc: { fontSize: 14, lineHeight: 20 },
+  signInBannerBtn: {
+    marginTop: 4,
     borderRadius: 10,
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  paywallButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  closeButton: {
     paddingVertical: 12,
-    alignItems: 'center',
+    alignItems: "center",
   },
-  closeButtonText: {
-    fontSize: 16,
-  },
+  signInBannerBtnText: { fontSize: 15, fontWeight: "600" },
   scrollContent: {
     paddingVertical: 20,
     paddingHorizontal: 16,

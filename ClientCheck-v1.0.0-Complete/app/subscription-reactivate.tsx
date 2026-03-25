@@ -6,6 +6,10 @@ import { useAuth } from "@/hooks/use-auth";
 import { useState } from "react";
 import * as Haptics from "expo-haptics";
 import { apiFetch } from "@/lib/api";
+import {
+  CONTRACTOR_PRO_ANNUAL_PRICE_DISPLAY,
+  CONTRACTOR_PRO_MONTHLY_PRICE_DISPLAY,
+} from "@/shared/billing-config";
 
 export default function SubscriptionReactivateScreen() {
   const colors = useColors();
@@ -115,7 +119,7 @@ export default function SubscriptionReactivateScreen() {
             ]}
           >
             <View style={styles.planHeader}>
-              <Text style={[styles.planName, { color: colors.foreground }]}>Monthly</Text>
+              <Text style={[styles.planName, { color: colors.foreground }]}>Pro · Monthly</Text>
               {selectedPlan === "monthly" && (
                 <View
                   style={[styles.checkmark, { backgroundColor: colors.primary }]}
@@ -124,7 +128,7 @@ export default function SubscriptionReactivateScreen() {
                 </View>
               )}
             </View>
-            <Text style={[styles.planPrice, { color: colors.primary }]}>$9.99</Text>
+            <Text style={[styles.planPrice, { color: colors.primary }]}>{CONTRACTOR_PRO_MONTHLY_PRICE_DISPLAY}</Text>
             <Text style={[styles.planFrequency, { color: colors.muted }]}>/month</Text>
             <Text style={[styles.planDescription, { color: colors.muted }]}>
               Cancel anytime, no long-term commitment
@@ -148,12 +152,12 @@ export default function SubscriptionReactivateScreen() {
           >
             <View style={styles.planHeader}>
               <View>
-                <Text style={[styles.planName, { color: colors.foreground }]}>Yearly</Text>
+                <Text style={[styles.planName, { color: colors.foreground }]}>Pro · Yearly</Text>
                 <View
                   style={[styles.saveBadge, { backgroundColor: colors.success + "20" }]}
                 >
                   <Text style={[styles.saveBadgeText, { color: colors.success }]}>
-                    Save 17%
+                    Best value
                   </Text>
                 </View>
               </View>
@@ -165,7 +169,7 @@ export default function SubscriptionReactivateScreen() {
                 </View>
               )}
             </View>
-            <Text style={[styles.planPrice, { color: colors.primary }]}>$120</Text>
+            <Text style={[styles.planPrice, { color: colors.primary }]}>{CONTRACTOR_PRO_ANNUAL_PRICE_DISPLAY}</Text>
             <Text style={[styles.planFrequency, { color: colors.muted }]}>/year</Text>
             <Text style={[styles.planDescription, { color: colors.muted }]}>
               Non-refundable. Best value for committed users.
