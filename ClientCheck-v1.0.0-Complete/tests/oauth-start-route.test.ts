@@ -43,14 +43,15 @@ afterEach(() => {
 });
 
 describe("/api/oauth/start", () => {
-  it("redirects using EXPO_PUBLIC_OAUTH_SERVER_URL when server-only env vars are absent", async () => {
+  it("redirects using the configured portal URL for /app-auth", async () => {
     const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const server = await startOAuthTestServer({
       OAUTH_PORTAL_URL: "",
-      OAUTH_SERVER_URL: "",
+      OAUTH_SERVER_URL: "https://oauth.example.com",
+      VITE_OAUTH_PORTAL_URL: "https://portal.example.com",
       EXPO_PUBLIC_OAUTH_PORTAL_URL: "",
-      EXPO_PUBLIC_OAUTH_SERVER_URL: "https://oauth.example.com",
+      EXPO_PUBLIC_OAUTH_SERVER_URL: "",
     });
 
     try {
@@ -61,7 +62,7 @@ describe("/api/oauth/start", () => {
 
       expect(response.status).toBe(302);
       expect(response.headers.get("location")).toBe(
-        "https://oauth.example.com/app-auth?appId=test-app&redirectUri=https%3A%2F%2Fclientcheck-production.up.railway.app%2Fapi%2Foauth%2Fcallback&state=test-state&type=signIn&account_type=customer",
+        "https://portal.example.com/app-auth?appId=test-app&redirectUri=https%3A%2F%2Fclientcheck-production.up.railway.app%2Fapi%2Foauth%2Fcallback&state=test-state&type=signIn&account_type=customer",
       );
       expect(consoleLog).toHaveBeenCalled();
       expect(consoleError).not.toHaveBeenCalled();
@@ -70,13 +71,14 @@ describe("/api/oauth/start", () => {
     }
   });
 
-  it("returns JSON with a safe message when OAuth start is misconfigured", async () => {
+  it("returns JSON with a safe message when the portal URL is missing", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const server = await startOAuthTestServer({
       OAUTH_PORTAL_URL: "",
-      OAUTH_SERVER_URL: "",
+      OAUTH_SERVER_URL: "https://oauth.example.com",
+      VITE_OAUTH_PORTAL_URL: "",
       EXPO_PUBLIC_OAUTH_PORTAL_URL: "",
-      EXPO_PUBLIC_OAUTH_SERVER_URL: "",
+      EXPO_PUBLIC_OAUTH_SERVER_URL: "https://oauth.example.com",
     });
 
     try {
@@ -87,7 +89,7 @@ describe("/api/oauth/start", () => {
       expect(response.status).toBe(500);
       await expect(response.json()).resolves.toEqual({
         error: "OAuth start failed",
-        message: "OAuth start route is misconfigured",
+        message: "OAuth portal URL is not configured",
       });
       expect(consoleError).toHaveBeenCalled();
     } finally {

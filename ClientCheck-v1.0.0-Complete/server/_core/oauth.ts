@@ -36,14 +36,25 @@ function getQueryParam(req: Request, key: string): string | undefined {
 
 function getOauthPortalConfig() {
   const trim = (s: string | undefined) => (s ?? "").trim().replace(/\/$/, "");
-  const portalUrl = trim(process.env.OAUTH_PORTAL_URL) || trim(process.env.EXPO_PUBLIC_OAUTH_PORTAL_URL);
-  const serverUrl = trim(process.env.OAUTH_SERVER_URL) || trim(process.env.EXPO_PUBLIC_OAUTH_SERVER_URL);
-  const base = portalUrl || serverUrl;
-  return { portalUrl, serverUrl, base };
+  const portalUrl =
+    trim(process.env.OAUTH_PORTAL_URL) ||
+    trim(process.env.VITE_OAUTH_PORTAL_URL) ||
+    trim(process.env.EXPO_PUBLIC_OAUTH_PORTAL_URL);
+  const serverUrl = trim(process.env.OAUTH_SERVER_URL);
+  const publicServerUrl = trim(process.env.EXPO_PUBLIC_OAUTH_SERVER_URL);
+  const viteAppId = trim(process.env.VITE_APP_ID);
+  const publicAppId = trim(process.env.EXPO_PUBLIC_APP_ID);
+  const portalBaseSource = portalUrl
+    ? process.env.OAUTH_PORTAL_URL?.trim()
+      ? "OAUTH_PORTAL_URL"
+      : process.env.VITE_OAUTH_PORTAL_URL?.trim()
+        ? "VITE_OAUTH_PORTAL_URL"
+        : "EXPO_PUBLIC_OAUTH_PORTAL_URL"
+    : null;
+  return { portalUrl, portalBaseSource, serverUrl, publicServerUrl, viteAppId, publicAppId };
 }
 
-function getOauthPortalEntryUrl(): URL | null {
-  const { base } = getOauthPortalConfig();
+function getOauthPortalEntryUrl(base: string): URL | null {
   if (!base) return null;
   try {
     return new URL("/app-auth", `${base}/`);
@@ -141,31 +152,45 @@ function buildUserResponse(
 
 export function registerOAuthRoutes(app: Express) {
   app.get("/api/oauth/start", async (req: Request, res: Response) => {
-    const redirectUri = getQueryParam(req, "redirect_uri") ?? getQueryParam(req, "redirectUri");
-    const state = getQueryParam(req, "state");
-    const appId = getQueryParam(req, "appId") ?? process.env.VITE_APP_ID ?? process.env.EXPO_PUBLIC_APP_ID ?? "";
-    const type = getQueryParam(req, "type") ?? "signIn";
-    const accountType = getQueryParam(req, "account_type");
-    const oauthConfig = getOauthPortalConfig();
-
-    console.log("[OAuth] incoming appId =", appId);
-    console.log("[OAuth] incoming redirect_uri =", redirectUri ?? "");
-    console.log("[OAuth] incoming state =", state ?? "");
-    console.log("[OAuth] incoming type =", type);
-    console.log("[OAuth] incoming account_type =", accountType ?? "");
-    console.log("[OAuth] config has OAUTH_PORTAL_URL =", Boolean(oauthConfig.portalUrl));
-    console.log("[OAuth] config has OAUTH_SERVER_URL =", Boolean(oauthConfig.serverUrl));
-    console.log("[OAuth] config base url =", oauthConfig.base ?? "");
-
-    if (!redirectUri || !state || !appId) {
-      res.status(400).json({ error: "redirect_uri, state, and appId are required" });
-      return;
-    }
-
     try {
-      const url = getOauthPortalEntryUrl();
+      const redirectUri = getQueryParam(req, "redirect_uri") ?? getQueryParam(req, "redirectUri");
+      const state = getQueryParam(req, "state");
+      const oauthConfig = getOauthPortalConfig();
+      const appId = getQueryParam(req, "appId") ?? oauthConfig.viteAppId ?? oauthConfig.publicAppId ?? "";
+      const type = getQueryParam(req, "type") ?? "signIn";
+      const accountType = getQueryParam(req, "account_type");
+
+      console.log("[OAuth] incoming appId =", appId);
+      console.log("[OAuth] incoming redirect_uri =", redirectUri ?? "");
+      console.log("[OAuth] incoming state =", state ?? "");
+      console.log("[OAuth] incoming type =", type);
+      console.log("[OAuth] incoming account_type =", accountType ?? "");
+      console.log("[OAuth] has OAUTH_PORTAL_URL =", Boolean(oauthConfig.portalUrl));
+      console.log("[OAuth] has VITE_OAUTH_PORTAL_URL =", Boolean(process.env.VITE_OAUTH_PORTAL_URL?.trim()));
+      console.log("[OAuth] has EXPO_PUBLIC_OAUTH_PORTAL_URL =", Boolean(process.env.EXPO_PUBLIC_OAUTH_PORTAL_URL?.trim()));
+      console.log("[OAuth] has OAUTH_SERVER_URL =", Boolean(oauthConfig.serverUrl));
+      console.log("[OAuth] has EXPO_PUBLIC_OAUTH_SERVER_URL =", Boolean(oauthConfig.publicServerUrl));
+      console.log("[OAuth] has VITE_APP_ID =", Boolean(oauthConfig.viteAppId));
+      console.log("[OAuth] has EXPO_PUBLIC_APP_ID =", Boolean(oauthConfig.publicAppId));
+      console.log("[OAuth] selected portal base source =", oauthConfig.portalBaseSource ?? "");
+      console.log("[OAuth] selected portal base url =", oauthConfig.portalUrl ?? "");
+
+      if (!redirectUri || !state || !appId) {
+        res.status(400).json({ error: "redirect_uri, state, and appId are required" });
+        return;
+      }
+
+      if (!oauthConfig.serverUrl) {
+        res.status(500).json({
+          error: "OAuth start failed",
+          message: "OAUTH_SERVER_URL is not configured",
+        });
+        return;
+      }
+
+      const url = getOauthPortalEntryUrl(oauthConfig.portalUrl);
       if (!url) {
-        throw new Error("OAuth start route is misconfigured");
+        throw new Error("OAuth portal URL is not configured");
       }
 
       url.searchParams.set("appId", appId);
@@ -180,18 +205,8 @@ export function registerOAuthRoutes(app: Express) {
       res.redirect(302, url.toString());
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown OAuth start error";
-      console.error("[OAuth] Start failed", {
-        message,
-        stack: error instanceof Error ? error.stack : undefined,
-        appId,
-        redirectUri,
-        state,
-        type,
-        accountType,
-        hasOauthPortalUrl: Boolean(oauthConfig.portalUrl),
-        hasOauthServerUrl: Boolean(oauthConfig.serverUrl),
-        oauthBaseUrl: oauthConfig.base ?? "",
-      });
+      console.error("[OAuth] Start failed:", message);
+      console.error(error instanceof Error ? error.stack : error);
       res.status(500).json({ error: "OAuth start failed", message });
     }
   });
