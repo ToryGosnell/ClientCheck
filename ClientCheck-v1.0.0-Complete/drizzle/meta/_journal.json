@@ -169,6 +169,13 @@
       "when": 1773376000000,
       "tag": "0028_contractor_invite_referrals",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1773377000000,
+      "tag": "0029_first_party_auth_primitives",
+      "breakpoints": true
     }
   ]
 }
