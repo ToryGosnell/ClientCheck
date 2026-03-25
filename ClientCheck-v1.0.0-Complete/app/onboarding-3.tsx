@@ -76,7 +76,11 @@ export default function Onboarding3Screen() {
           {/* CTAs */}
           <View className="gap-3">
             <TouchableOpacity
-              onPress={() => startOAuthLogin()}
+              onPress={() => {
+                void startOAuthLogin().catch((error) => {
+                  console.warn("[OAuth] Failed to start login:", error);
+                });
+              }}
               className="w-full py-4 rounded-lg items-center justify-center"
               style={{ backgroundColor: colors.primary }}
               activeOpacity={0.8}

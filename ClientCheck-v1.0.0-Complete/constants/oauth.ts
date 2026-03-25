@@ -4,11 +4,12 @@ import * as ReactNative from "react-native";
 const schemeFromBundleId = "clientcheck";
 
 /** Hardcoded API host — all REST, tRPC, and web OAuth callback URLs use this (no env / no relative origins). */
-export const API_BASE = "https://clientcheck-production.up.railway.app";
+const DEFAULT_API_BASE = "https://clientcheck-production.up.railway.app";
 
 const env = {
   portal: process.env.EXPO_PUBLIC_OAUTH_PORTAL_URL ?? "",
   server: process.env.EXPO_PUBLIC_OAUTH_SERVER_URL ?? "",
+  apiBase: process.env.EXPO_PUBLIC_API_BASE_URL ?? "",
   appId: process.env.EXPO_PUBLIC_APP_ID ?? "",
   ownerId: process.env.EXPO_PUBLIC_OWNER_OPEN_ID ?? "",
   ownerName: process.env.EXPO_PUBLIC_OWNER_NAME ?? "",
@@ -17,6 +18,7 @@ const env = {
 
 export const OAUTH_PORTAL_URL = env.portal;
 export const OAUTH_SERVER_URL = env.server;
+export const API_BASE = (env.apiBase || DEFAULT_API_BASE).replace(/\/$/, "");
 export const APP_ID = env.appId;
 export const OWNER_OPEN_ID = env.ownerId;
 export const OWNER_NAME = env.ownerName;
@@ -37,6 +39,11 @@ const encodeState = (value: string) => {
     return BufferImpl.from(value, "utf-8").toString("base64");
   }
   return value;
+};
+
+const trimToNull = (value: string | null | undefined): string | null => {
+  const trimmed = (value ?? "").trim();
+  return trimmed.length > 0 ? trimmed : null;
 };
 
 /**
@@ -69,65 +76,109 @@ export const getRedirectUri = () => {
 };
 
 function getOAuthStartBase(): string | null {
-  const candidate = OAUTH_SERVER_URL || getApiBaseUrl();
+  const candidate = trimToNull(OAUTH_SERVER_URL) || trimToNull(getApiBaseUrl());
   if (!candidate) return null;
   const url = safeUrl(candidate);
   return url?.toString().replace(/\/$/, "") ?? null;
 }
 
-export const getLoginUrl = (options?: { accountType?: string }): string | null => {
-  const redirectUri = getRedirectUri();
-  const state = encodeState(redirectUri);
+type OAuthLoginRequest = {
+  serverBase: string;
+  appId: string;
+  redirectUri: string;
+  state: string;
+  type: "signIn";
+  accountType: string | null;
+  url: string;
+};
 
+function buildOAuthLoginRequest(options?: { accountType?: string }): OAuthLoginRequest {
   const startBase = getOAuthStartBase();
   if (!startBase) {
-    console.warn("[OAuth] Cannot build login URL — configure EXPO_PUBLIC_OAUTH_SERVER_URL.");
-    return null;
+    console.error("[OAuth] Missing OAuth server base", {
+      oauthServerUrl: OAUTH_SERVER_URL,
+      apiBase: getApiBaseUrl(),
+    });
+    throw new Error("OAuth configuration is incomplete");
   }
 
-  const url = safeUrl(`${startBase}/api/oauth/start`);
-  if (!url) {
-    console.warn("[OAuth] Cannot build login URL from configured OAuth server URL.");
-    return null;
+  const appId = trimToNull(APP_ID) ?? "";
+  const redirectUri = trimToNull(getRedirectUri()) ?? "";
+  const state = trimToNull(redirectUri ? encodeState(redirectUri) : "") ?? "";
+  const type = "signIn" as const;
+  const accountType = trimToNull(options?.accountType);
+
+  const missingValues = {
+    appId: appId.length === 0,
+    redirectUri: redirectUri.length === 0,
+    state: state.length === 0,
+  };
+
+  if (missingValues.appId || missingValues.redirectUri || missingValues.state) {
+    console.error("[OAuth] Missing required config", {
+      appId,
+      redirectUri,
+      state,
+      missingValues,
+    });
+    throw new Error("OAuth configuration is incomplete");
   }
 
-  url.searchParams.set("appId", APP_ID);
-  url.searchParams.set("redirect_uri", redirectUri);
-  url.searchParams.set("state", state);
-  url.searchParams.set("type", "signIn");
-  if (options?.accountType) {
-    url.searchParams.set("account_type", options.accountType);
+  const queryParts = [
+    `appId=${encodeURIComponent(appId)}`,
+    `redirect_uri=${encodeURIComponent(redirectUri)}`,
+    `state=${encodeURIComponent(state)}`,
+    `type=${encodeURIComponent(type)}`,
+  ];
+  if (accountType) {
+    queryParts.push(`account_type=${encodeURIComponent(accountType)}`);
   }
 
-  return url.toString();
+  return {
+    serverBase: startBase,
+    appId,
+    redirectUri,
+    state,
+    type,
+    accountType,
+    url: `${startBase}/api/oauth/start?${queryParts.join("&")}`,
+  };
+}
+
+export const getLoginUrl = (options?: { accountType?: string }): string => {
+  return buildOAuthLoginRequest(options).url;
 };
 
 /**
  * Start OAuth login flow.
  */
-export async function startOAuthLogin(options?: { accountType?: string }): Promise<string | null> {
-  const loginUrl = getLoginUrl(options);
-  if (!loginUrl) return null;
+export async function startOAuthLogin(options?: { accountType?: string }): Promise<string> {
+  const loginRequest = buildOAuthLoginRequest(options);
+  console.log("[OAuth] server base =", loginRequest.serverBase);
+  console.log("[OAuth] appId =", loginRequest.appId);
+  console.log("[OAuth] redirectUri =", loginRequest.redirectUri);
+  console.log("[OAuth] state =", loginRequest.state);
+  console.log("[OAuth] type =", loginRequest.type);
+  console.log("[OAuth] accountType =", loginRequest.accountType ?? "");
+  console.log("[OAuth] final url =", loginRequest.url);
 
   if (ReactNative.Platform.OS === "web") {
     if (typeof window !== "undefined") {
-      window.location.href = loginUrl;
-      return loginUrl;
+      window.location.href = loginRequest.url;
+      return loginRequest.url;
     }
-    return null;
+    throw new Error("OAuth login could not start in this environment");
   }
 
   try {
-    const supported = await Linking.canOpenURL(loginUrl);
+    const supported = await Linking.canOpenURL(loginRequest.url);
     if (!supported) {
-      console.warn("[OAuth] Cannot open login URL: URL scheme not supported");
-      return null;
+      throw new Error("OAuth login URL could not be opened");
     }
-    await Linking.openURL(loginUrl);
-    return loginUrl;
+    await Linking.openURL(loginRequest.url);
+    return loginRequest.url;
   } catch (error) {
     console.warn("[OAuth] Failed to open login URL:", error);
+    throw error instanceof Error ? error : new Error("OAuth login could not be started");
   }
-
-  return null;
 }

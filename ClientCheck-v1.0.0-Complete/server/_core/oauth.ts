@@ -8,17 +8,25 @@ import { sdk } from "./sdk";
 /** Where to send the browser after web OAuth cookie is set. Never default to localhost in production. */
 function oauthWebSuccessRedirectUrl(): string {
   const trim = (s: string | undefined) => (s ?? "").trim().replace(/\/$/, "");
-  const explicit =
-    trim(process.env.OAUTH_WEB_REDIRECT_URL) ||
-    trim(process.env.FRONTEND_URL) ||
-    trim(process.env.APP_BASE_URL);
+  const explicit = trim(process.env.OAUTH_WEB_REDIRECT_URL);
   if (explicit) return explicit;
-  const preview = trim(process.env.EXPO_WEB_PREVIEW_URL) || trim(process.env.EXPO_PACKAGER_PROXY_URL);
-  if (preview) return preview;
-  if (process.env.NODE_ENV !== "production") return "http://localhost:8081";
-  return trim(process.env.RAILWAY_PUBLIC_DOMAIN)
-    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-    : "https://clientcheck-production.up.railway.app";
+
+  const base =
+    trim(process.env.FRONTEND_URL) ||
+    trim(process.env.APP_BASE_URL) ||
+    trim(process.env.EXPO_WEB_PREVIEW_URL) ||
+    trim(process.env.EXPO_PACKAGER_PROXY_URL) ||
+    (process.env.NODE_ENV !== "production"
+      ? "http://localhost:8081"
+      : trim(process.env.RAILWAY_PUBLIC_DOMAIN)
+        ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+        : "https://clientcheck-production.up.railway.app");
+
+  try {
+    return new URL("/oauth/callback", `${base}/`).toString().replace(/\/$/, "");
+  } catch {
+    return `${base}/oauth/callback`;
+  }
 }
 
 function getQueryParam(req: Request, key: string): string | undefined {
@@ -26,12 +34,19 @@ function getQueryParam(req: Request, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function getOauthPortalEntryUrl(): URL | null {
+function getOauthPortalConfig() {
   const trim = (s: string | undefined) => (s ?? "").trim().replace(/\/$/, "");
-  const base = trim(process.env.OAUTH_PORTAL_URL) || trim(process.env.OAUTH_SERVER_URL);
+  const portalUrl = trim(process.env.OAUTH_PORTAL_URL) || trim(process.env.EXPO_PUBLIC_OAUTH_PORTAL_URL);
+  const serverUrl = trim(process.env.OAUTH_SERVER_URL) || trim(process.env.EXPO_PUBLIC_OAUTH_SERVER_URL);
+  const base = portalUrl || serverUrl;
+  return { portalUrl, serverUrl, base };
+}
+
+function getOauthPortalEntryUrl(): URL | null {
+  const { base } = getOauthPortalConfig();
   if (!base) return null;
   try {
-    return new URL(`${base}/app-auth`);
+    return new URL("/app-auth", `${base}/`);
   } catch {
     return null;
   }
@@ -128,30 +143,57 @@ export function registerOAuthRoutes(app: Express) {
   app.get("/api/oauth/start", async (req: Request, res: Response) => {
     const redirectUri = getQueryParam(req, "redirect_uri") ?? getQueryParam(req, "redirectUri");
     const state = getQueryParam(req, "state");
-    const appId = getQueryParam(req, "appId") ?? process.env.VITE_APP_ID ?? "";
+    const appId = getQueryParam(req, "appId") ?? process.env.VITE_APP_ID ?? process.env.EXPO_PUBLIC_APP_ID ?? "";
     const type = getQueryParam(req, "type") ?? "signIn";
     const accountType = getQueryParam(req, "account_type");
+    const oauthConfig = getOauthPortalConfig();
+
+    console.log("[OAuth] incoming appId =", appId);
+    console.log("[OAuth] incoming redirect_uri =", redirectUri ?? "");
+    console.log("[OAuth] incoming state =", state ?? "");
+    console.log("[OAuth] incoming type =", type);
+    console.log("[OAuth] incoming account_type =", accountType ?? "");
+    console.log("[OAuth] config has OAUTH_PORTAL_URL =", Boolean(oauthConfig.portalUrl));
+    console.log("[OAuth] config has OAUTH_SERVER_URL =", Boolean(oauthConfig.serverUrl));
+    console.log("[OAuth] config base url =", oauthConfig.base ?? "");
 
     if (!redirectUri || !state || !appId) {
       res.status(400).json({ error: "redirect_uri, state, and appId are required" });
       return;
     }
 
-    const url = getOauthPortalEntryUrl();
-    if (!url) {
-      res.status(500).json({ error: "OAuth start route is misconfigured" });
-      return;
-    }
+    try {
+      const url = getOauthPortalEntryUrl();
+      if (!url) {
+        throw new Error("OAuth start route is misconfigured");
+      }
 
-    url.searchParams.set("appId", appId);
-    url.searchParams.set("redirectUri", redirectUri);
-    url.searchParams.set("state", state);
-    url.searchParams.set("type", type);
-    if (accountType) {
-      url.searchParams.set("account_type", accountType);
-    }
+      url.searchParams.set("appId", appId);
+      url.searchParams.set("redirectUri", redirectUri);
+      url.searchParams.set("state", state);
+      url.searchParams.set("type", type);
+      if (accountType) {
+        url.searchParams.set("account_type", accountType);
+      }
 
-    res.redirect(302, url.toString());
+      console.log("[OAuth] final redirect target =", url.toString());
+      res.redirect(302, url.toString());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown OAuth start error";
+      console.error("[OAuth] Start failed", {
+        message,
+        stack: error instanceof Error ? error.stack : undefined,
+        appId,
+        redirectUri,
+        state,
+        type,
+        accountType,
+        hasOauthPortalUrl: Boolean(oauthConfig.portalUrl),
+        hasOauthServerUrl: Boolean(oauthConfig.serverUrl),
+        oauthBaseUrl: oauthConfig.base ?? "",
+      });
+      res.status(500).json({ error: "OAuth start failed", message });
+    }
   });
 
   app.get("/api/oauth/callback", async (req: Request, res: Response) => {
@@ -179,6 +221,7 @@ export function registerOAuthRoutes(app: Express) {
       }
 
       const frontendUrl = oauthWebSuccessRedirectUrl();
+      console.log("[OAuth] web success redirect target =", frontendUrl);
       res.redirect(302, frontendUrl);
     } catch (error) {
       console.error("[OAuth] Callback failed", error);

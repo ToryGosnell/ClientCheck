@@ -45,8 +45,10 @@ export default function SelectAccountScreen() {
     try {
       track("signup_started", { account_type: "contractor" });
       await setSelectedAccountType("contractor");
-      const started = await startOAuthLogin({ accountType: "contractor" });
-      if (!started) setOauthStarting(false);
+      await startOAuthLogin({ accountType: "contractor" });
+    } catch (error) {
+      console.warn("[OAuth] Failed to start contractor login:", error);
+      setOauthStarting(false);
     } finally {
       if (Platform.OS !== "web") setOauthStarting(false);
     }
@@ -58,8 +60,10 @@ export default function SelectAccountScreen() {
     try {
       track("signup_started", { account_type: "customer" });
       await setSelectedAccountType("customer");
-      const started = await startOAuthLogin({ accountType: "customer" });
-      if (!started) setOauthStarting(false);
+      await startOAuthLogin({ accountType: "customer" });
+    } catch (error) {
+      console.warn("[OAuth] Failed to start customer login:", error);
+      setOauthStarting(false);
     } finally {
       if (Platform.OS !== "web") setOauthStarting(false);
     }
@@ -72,8 +76,10 @@ export default function SelectAccountScreen() {
     try {
       await setPostLoginRedirect("/admin");
       await setSelectedAccountType("contractor");
-      const started = await startOAuthLogin({ accountType: "contractor" });
-      if (!started) setOauthStarting(false);
+      await startOAuthLogin({ accountType: "contractor" });
+    } catch (error) {
+      console.warn("[OAuth] Failed to start admin login:", error);
+      setOauthStarting(false);
     } finally {
       if (Platform.OS !== "web") setOauthStarting(false);
     }

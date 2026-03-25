@@ -11,6 +11,7 @@ import * as Linking from "expo-linking";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text } from "react-native";
+import { Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function OAuthCallback() {
@@ -87,6 +88,21 @@ export default function OAuthCallback() {
         let sessionToken: string | null = null;
 
         if (!code && !state) {
+          if (Platform.OS === "web") {
+            const apiUser = await Api.getMe();
+            if (apiUser && apiUser.id != null) {
+              const userInfo = Auth.userFromApiJson(apiUser as unknown as Record<string, unknown>);
+              await Auth.setUserInfo(userInfo);
+              void trackSignupCompletedIfNew({
+                id: apiUser.id,
+                isNewUser: apiUser.isNewUser === true,
+              });
+              setStatus("success");
+              await navigateAfterSession();
+              return;
+            }
+          }
+
           const initialUrl = await Linking.getInitialURL();
           if (initialUrl) {
             try {
@@ -155,7 +171,11 @@ export default function OAuthCallback() {
   }, []);
 
   const handleRetry = () => {
-    startOAuthLogin();
+    void startOAuthLogin().catch((error) => {
+      console.warn("[OAuth] Retry start failed:", error);
+      setStatus("error");
+      setErrorMessage(error instanceof Error ? error.message : "Sign-in could not be restarted.");
+    });
   };
 
   const handleGoBack = () => {
