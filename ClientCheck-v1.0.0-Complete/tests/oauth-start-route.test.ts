@@ -2,13 +2,19 @@ import express from "express";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const { authorizeRedirectMock } = vi.hoisted(() => ({
+  authorizeRedirectMock: vi.fn(),
+}));
+
 vi.mock("../server/db", () => ({
   getUserByOpenId: vi.fn(),
   upsertUser: vi.fn(),
 }));
 
 vi.mock("../server/_core/sdk", () => ({
-  sdk: {},
+  sdk: {
+    getAuthorizationRedirectUrl: authorizeRedirectMock,
+  },
 }));
 
 const originalEnv = { ...process.env };
@@ -40,17 +46,18 @@ async function startOAuthTestServer(env: Record<string, string | undefined>) {
 afterEach(() => {
   process.env = { ...originalEnv };
   vi.restoreAllMocks();
+  authorizeRedirectMock.mockReset();
 });
 
 describe("/api/oauth/start", () => {
-  it("redirects using the configured portal URL for /app-auth", async () => {
+  it("redirects directly to the OAuth provider authorize URL", async () => {
     const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    authorizeRedirectMock.mockResolvedValue(
+      "https://oauth.example.com/authorize?client_id=test-app&state=test-state",
+    );
     const server = await startOAuthTestServer({
-      OAUTH_PORTAL_URL: "",
       OAUTH_SERVER_URL: "https://oauth.example.com",
-      VITE_OAUTH_PORTAL_URL: "https://portal.example.com",
-      EXPO_PUBLIC_OAUTH_PORTAL_URL: "",
       EXPO_PUBLIC_OAUTH_SERVER_URL: "",
     });
 
@@ -62,8 +69,13 @@ describe("/api/oauth/start", () => {
 
       expect(response.status).toBe(302);
       expect(response.headers.get("location")).toBe(
-        "https://portal.example.com/app-auth?appId=test-app&redirectUri=https%3A%2F%2Fclientcheck-production.up.railway.app%2Fapi%2Foauth%2Fcallback&state=test-state&type=signIn&account_type=customer",
+        "https://oauth.example.com/authorize?client_id=test-app&state=test-state",
       );
+      expect(authorizeRedirectMock).toHaveBeenCalledWith({
+        appId: "test-app",
+        redirectUri: "https://clientcheck-production.up.railway.app/api/oauth/callback",
+        state: "test-state",
+      });
       expect(consoleLog).toHaveBeenCalled();
       expect(consoleError).not.toHaveBeenCalled();
     } finally {
@@ -71,13 +83,10 @@ describe("/api/oauth/start", () => {
     }
   });
 
-  it("returns JSON with a safe message when the portal URL is missing", async () => {
+  it("returns JSON with a safe message when OAUTH_SERVER_URL is missing", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const server = await startOAuthTestServer({
-      OAUTH_PORTAL_URL: "",
-      OAUTH_SERVER_URL: "https://oauth.example.com",
-      VITE_OAUTH_PORTAL_URL: "",
-      EXPO_PUBLIC_OAUTH_PORTAL_URL: "",
+      OAUTH_SERVER_URL: "",
       EXPO_PUBLIC_OAUTH_SERVER_URL: "https://oauth.example.com",
     });
 
@@ -89,9 +98,9 @@ describe("/api/oauth/start", () => {
       expect(response.status).toBe(500);
       await expect(response.json()).resolves.toEqual({
         error: "OAuth start failed",
-        message: "OAuth portal URL is not configured",
+        message: "OAUTH_SERVER_URL is not configured",
       });
-      expect(consoleError).toHaveBeenCalled();
+      expect(consoleError).not.toHaveBeenCalled();
     } finally {
       await server.close();
     }

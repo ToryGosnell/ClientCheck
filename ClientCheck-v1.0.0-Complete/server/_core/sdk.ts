@@ -8,6 +8,8 @@ import type { User } from "../../drizzle/schema";
 import * as db from "../db";
 import { ENV } from "./env";
 import type {
+  AuthorizeRequest,
+  AuthorizeResponse,
   ExchangeTokenRequest,
   ExchangeTokenResponse,
   GetUserInfoResponse,
@@ -27,6 +29,7 @@ export type SessionPayload = {
 const EXCHANGE_TOKEN_PATH = `/webdev.v1.WebDevAuthPublicService/ExchangeToken`;
 const GET_USER_INFO_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInfo`;
 const GET_USER_INFO_WITH_JWT_PATH = `/webdev.v1.WebDevAuthPublicService/GetUserInfoWithJwt`;
+const AUTHORIZE_PATH = `/webdev.v1.WebDevAuthPublicService/Authorize`;
 
 class OAuthService {
   constructor(private client: ReturnType<typeof axios.create>) {
@@ -56,6 +59,27 @@ class OAuthService {
     const { data } = await this.client.post<ExchangeTokenResponse>(EXCHANGE_TOKEN_PATH, payload);
 
     return data;
+  }
+
+  async getAuthorizationRedirectUrl(input: {
+    appId: string;
+    redirectUri: string;
+    state: string;
+  }): Promise<string> {
+    const payload: AuthorizeRequest = {
+      redirectUri: input.redirectUri,
+      projectId: input.appId,
+      state: input.state,
+      responseType: "code",
+      scope: "",
+    };
+
+    const { data } = await this.client.post<AuthorizeResponse>(AUTHORIZE_PATH, payload);
+    if (!isNonEmptyString(data?.redirectUrl)) {
+      throw new Error("OAuth authorize response did not include redirectUrl");
+    }
+
+    return data.redirectUrl;
   }
 
   async getUserInfoByToken(token: ExchangeTokenResponse): Promise<GetUserInfoResponse> {
@@ -106,6 +130,14 @@ class SDKServer {
    */
   async exchangeCodeForToken(code: string, state: string): Promise<ExchangeTokenResponse> {
     return this.oauthService.getTokenByCode(code, state);
+  }
+
+  async getAuthorizationRedirectUrl(input: {
+    appId: string;
+    redirectUri: string;
+    state: string;
+  }): Promise<string> {
+    return this.oauthService.getAuthorizationRedirectUrl(input);
   }
 
   /**
