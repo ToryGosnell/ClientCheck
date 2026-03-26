@@ -1,7 +1,5 @@
 import "dotenv/config";
-import fs from "fs";
 import express from "express";
-import mysql from "mysql2/promise";
 import * as Sentry from "@sentry/node";
 import { nodeProfilingIntegration } from "@sentry/profiling-node";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
@@ -16,38 +14,6 @@ import platformRouter from "../routes/platform";
 import billingRouter from "../routes/billing";
 import { handleStripeWebhookHttp } from "../stripe-webhook-handler";
 import { globalLimiter } from "../middleware/rate-limit";
-
-// TEMP: remove after auth migration is applied
-async function runAuthMigrationOnce() {
-  try {
-    const dbUrl = process.env.DATABASE_URL;
-    if (!dbUrl) {
-      console.log("[Migration] No DATABASE_URL found");
-      return;
-    }
-
-    console.log("[Migration] Connecting...");
-
-    const sql = fs.readFileSync(
-      "drizzle/0029_first_party_auth_primitives.sql",
-      "utf-8"
-    );
-
-    const connection = await mysql.createConnection({
-      uri: dbUrl,
-      multipleStatements: true,
-    });
-
-    console.log("[Migration] Running auth migration...");
-    await connection.query(sql);
-
-    console.log("[Migration] DONE ✅");
-    await connection.end();
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[Migration] FAILED ❌", message);
-  }
-}
 
 async function startServer() {
   try {
@@ -65,7 +31,6 @@ async function startServer() {
     }
 
     const app = express();
-    await runAuthMigrationOnce();
 
     try {
       const seeded = await seedAdminUserFromEnv();
