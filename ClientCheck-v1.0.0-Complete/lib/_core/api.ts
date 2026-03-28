@@ -17,12 +17,10 @@ export async function apiCall(endpoint: string, options: RequestInit = {}) {
       : null;
 
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
     ...(options.headers as Record<string, string>),
   };
 
   if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
     console.log("[AUTH] Using token:", token);
   } else {
     console.log("[AUTH] No token found");
@@ -30,8 +28,15 @@ export async function apiCall(endpoint: string, options: RequestInit = {}) {
 
   console.log("[API] Base URL:", API_BASE, "Endpoint:", endpoint);
   const res = await fetch(`${API_BASE}${endpoint}`, {
-    ...options,
-    headers,
+    method: options.method || "GET",
+    headers: {
+      ...(options.headers as Record<string, string>),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body:
+      options.body && typeof options.body !== "string"
+        ? JSON.stringify(options.body)
+        : options.body,
     credentials: "include",
   });
 
