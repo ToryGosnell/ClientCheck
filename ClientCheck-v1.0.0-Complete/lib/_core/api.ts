@@ -1,4 +1,7 @@
 const SESSION_TOKEN_KEY = "app_session_token";
+const API_BASE =
+  process.env.EXPO_PUBLIC_API_BASE_URL ||
+  "https://clientcheck-production.up.railway.app";
 
 function getSessionToken() {
   if (typeof window !== "undefined") {
@@ -8,7 +11,10 @@ function getSessionToken() {
 }
 
 export async function apiCall(endpoint: string, options: RequestInit = {}) {
-  const token = getSessionToken();
+  const token =
+    typeof window !== "undefined"
+      ? localStorage.getItem("app_session_token")
+      : null;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -22,8 +28,8 @@ export async function apiCall(endpoint: string, options: RequestInit = {}) {
     console.log("[AUTH] No token found");
   }
 
-  const apiBase = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "");
-  const res = await fetch(`${apiBase}${endpoint}`, {
+  console.log("[API] Base URL:", API_BASE, "Endpoint:", endpoint);
+  const res = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
     headers,
     credentials: "include",
