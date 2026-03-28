@@ -43,6 +43,8 @@ export function useAuth(options?: UseAuthOptions) {
   const fetchUser = useCallback(async () => {
     setAuthState("loading");
     setError(null);
+    let nextUser: Auth.User | null = null;
+    let nextAuthState: AuthState = "unauthenticated";
 
     try {
       // Native requires a stored token. Web relies on cookie auth.
@@ -50,36 +52,44 @@ export function useAuth(options?: UseAuthOptions) {
         const sessionToken = await Auth.getSessionToken();
         if (!sessionToken) {
           await Auth.clearUserInfo();
-          setUser(null);
-          setAuthState("unauthenticated");
+          await Auth.removeSessionToken();
           return;
         }
       }
 
       // `/api/auth/me` is the source of truth for both web and native.
+      console.log("[AUTH] before /api/auth/me");
       const apiUser = await Api.me();
+      console.log("[AUTH] after /api/auth/me", {
+        hasApiUser: Boolean(apiUser),
+        apiUserId: apiUser?.id ?? null,
+        apiUserRole: apiUser?.role ?? null,
+      });
       if (!apiUser || apiUser.id == null) {
         await Auth.clearUserInfo();
-        if (Platform.OS !== "web") {
-          await Auth.removeSessionToken();
-        }
-        setUser(null);
-        setAuthState("unauthenticated");
+        await Auth.removeSessionToken();
         return;
       }
 
       const userInfo = Auth.userFromApiJson(apiUser as unknown as Record<string, unknown>);
-      setUser(userInfo);
-      setAuthState("authenticated");
+      nextUser = userInfo;
+      nextAuthState = "authenticated";
       await Auth.setUserInfo(userInfo);
       identify(String(userInfo.id), { name: userInfo.name, email: userInfo.email });
     } catch (err) {
       const authError = err instanceof Error ? err : new Error("Failed to fetch user");
       console.warn("[useAuth] fetchUser failed:", authError.message);
       setError(authError);
-      setUser(null);
       await Auth.clearUserInfo();
-      setAuthState("unauthenticated");
+      await Auth.removeSessionToken();
+    } finally {
+      setUser(nextUser);
+      setAuthState(nextAuthState);
+      console.log("[AUTH STATE]", {
+        loading: nextAuthState === "loading",
+        hasUser: !!nextUser,
+        role: nextUser?.role ?? null,
+      });
     }
   }, []);
 
@@ -135,6 +145,14 @@ export function useAuth(options?: UseAuthOptions) {
 
     void fetchUser();
   }, [autoFetch, fetchUser]);
+
+  useEffect(() => {
+    console.log("[AUTH STATE]", {
+      loading,
+      hasUser: !!user,
+      role: user?.role ?? null,
+    });
+  }, [loading, user]);
 
   return {
     user,

@@ -56,7 +56,12 @@ export default function LoginScreen() {
         }),
       });
       const data = (await loginResponse.json()) as Api.AuthResponse;
-      if (data && data.sessionToken) {
+      console.log("[AUTH] Login success response", {
+        hasSessionToken: Boolean(data?.sessionToken),
+        hasAppSessionId: Boolean(data?.app_session_id),
+        hasUser: Boolean(data?.user),
+      });
+      if (typeof window !== "undefined" && data && data.sessionToken) {
         console.log("[AUTH] Saving token:", data.sessionToken);
         localStorage.setItem("app_session_token", data.sessionToken);
       } else {
@@ -73,6 +78,16 @@ export default function LoginScreen() {
       if (explicitToken) {
         await Auth.setSessionToken(explicitToken);
       }
+      console.log("[AUTH] before /api/auth/me call from login");
+      const hydratedUser = await Api.me();
+      console.log("[AUTH] after /api/auth/me call from login", {
+        hasUser: Boolean(hydratedUser),
+        userId: hydratedUser?.id ?? null,
+        role: hydratedUser?.role ?? null,
+      });
+      if (!hydratedUser || hydratedUser.id == null) {
+        throw new Error("Auth hydration failed after login");
+      }
       const localStorageHasTokenAfterWrite =
         typeof window !== "undefined"
           ? Boolean(window.localStorage.getItem(SESSION_TOKEN_KEY))
@@ -82,7 +97,7 @@ export default function LoginScreen() {
         storageWriteAttempted,
         localStorageHasTokenAfterWrite,
       });
-      const userInfo = Auth.userFromApiJson(result.user as unknown as Record<string, unknown>);
+      const userInfo = Auth.userFromApiJson(hydratedUser as unknown as Record<string, unknown>);
       await Auth.setUserInfo(userInfo);
       await navigateAfterLogin();
     } catch (error) {

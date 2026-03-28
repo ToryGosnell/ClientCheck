@@ -23,6 +23,7 @@ import {
 import { track } from "@/lib/analytics";
 import type { ReviewWithContractor } from "@/shared/types";
 import { CustomerIdentityVerifiedBadge } from "@/components/customer-identity-verified-badge";
+import { SafeLoadingScreen } from "@/components/safe-loading-screen";
 
 /** Top/bottom gradient stops from theme primary (subtle highlight → deeper red). */
 function primaryGradientStops(primary: string): [string, string] {
@@ -136,7 +137,7 @@ const PREVIEW_CUSTOMERS = [
 export default function HomeScreen() {
   const colors = useColors();
   const router = useRouter();
-  const { user, isAuthenticated } = useAuth();
+  const { user, loading, isAuthenticated } = useAuth();
   const [watched, setWatched] = useState<WatchedCustomer[]>([]);
   const [recentSearchTerms, setRecentSearchTerms] = useState<string[]>([]);
   const { scope, userState, userCity, setScope, filter: filterByLoc, locationLabel } = useLocationScope();
@@ -179,6 +180,48 @@ export default function HomeScreen() {
       try { await Share.share({ message: msg }); } catch {}
     }
   }, []);
+
+  // ── RENEWAL REMINDER ──────────────────────────────────────────────────────────
+  const [showRenewalReminder, setShowRenewalReminder] = useState(false);
+  const expirationDate = (membership as any)?.freeTrialEndAt ?? (membership as any)?.subscriptionEndsAt ?? null;
+  const lastMilestone = (membership as any)?.lastReminderDaysMilestone ?? null;
+
+  useEffect(() => {
+    if (!membership || !isAuthenticated) return;
+    const days = getDaysRemaining(expirationDate);
+    const milestone = getCurrentReminderMilestone(days, lastMilestone);
+    if (milestone !== null) setShowRenewalReminder(true);
+  }, [membership, expirationDate, lastMilestone, isAuthenticated]);
+
+  const markReminderSeen = trpc.subscription.markReminderSeen.useMutation();
+  const handleReminderAcknowledge = (milestone: number) => {
+    setShowRenewalReminder(false);
+    markReminderSeen.mutate({ milestone });
+  };
+
+  const rawFlagged = flaggedCustomers ?? [];
+  const rawReviews = recentReviews ?? [];
+
+  const flaggedList = useMemo(() => filterByLoc(rawFlagged), [rawFlagged, filterByLoc]);
+  const reviewList = useMemo(() => {
+    const enriched = rawReviews.map((r: any) => ({
+      ...r,
+      city: r.customerCity ?? r.city ?? null,
+      state: r.customerState ?? r.state ?? null,
+    }));
+    return filterByLoc(enriched);
+  }, [rawReviews, filterByLoc]);
+
+  console.log("[HOME] render state", {
+    loading,
+    hasUser: !!user,
+    role: user?.role ?? null,
+    isAuthenticated,
+  });
+
+  if (loading) {
+    return <SafeLoadingScreen />;
+  }
 
   // ── LANDING (unauthenticated) ────────────────────────────────────────────────
   if (!isAuthenticated) {
@@ -278,38 +321,6 @@ export default function HomeScreen() {
       </ScreenBackground>
     );
   }
-
-  // ── RENEWAL REMINDER ──────────────────────────────────────────────────────────
-  const [showRenewalReminder, setShowRenewalReminder] = useState(false);
-  const expirationDate = (membership as any)?.freeTrialEndAt ?? (membership as any)?.subscriptionEndsAt ?? null;
-  const lastMilestone = (membership as any)?.lastReminderDaysMilestone ?? null;
-
-  useEffect(() => {
-    if (!membership || !isAuthenticated) return;
-    const days = getDaysRemaining(expirationDate);
-    const milestone = getCurrentReminderMilestone(days, lastMilestone);
-    if (milestone !== null) setShowRenewalReminder(true);
-  }, [membership, expirationDate, lastMilestone, isAuthenticated]);
-
-  const markReminderSeen = trpc.subscription.markReminderSeen.useMutation();
-  const handleReminderAcknowledge = (milestone: number) => {
-    setShowRenewalReminder(false);
-    markReminderSeen.mutate({ milestone });
-  };
-
-  // ── DASHBOARD (authenticated) ────────────────────────────────────────────────
-  const rawFlagged = flaggedCustomers ?? [];
-  const rawReviews = recentReviews ?? [];
-
-  const flaggedList = useMemo(() => filterByLoc(rawFlagged), [rawFlagged, filterByLoc]);
-  const reviewList = useMemo(() => {
-    const enriched = rawReviews.map((r: any) => ({
-      ...r,
-      city: r.customerCity ?? r.city ?? null,
-      state: r.customerState ?? r.state ?? null,
-    }));
-    return filterByLoc(enriched);
-  }, [rawReviews, filterByLoc]);
 
   return (
     <ScreenBackground backgroundKey="dashboard" overlayOpacity={0.85}>
