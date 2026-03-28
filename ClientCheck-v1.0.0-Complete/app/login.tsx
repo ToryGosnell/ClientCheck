@@ -45,7 +45,17 @@ export default function LoginScreen() {
       }
       await setSelectedAccountType(accountType);
 
-      const result = await Api.login({ email: email.trim(), password });
+      const loginResponse = await Api.apiCall("/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+        }),
+      });
+      const result = (await loginResponse.json()) as Api.AuthResponse;
       const data = result as { sessionToken?: string };
       if (typeof window !== "undefined" && data?.sessionToken) {
         localStorage.setItem("app_session_token", data.sessionToken);
