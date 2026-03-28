@@ -30,6 +30,7 @@ export async function apiCall(endpoint: string, options: RequestInit = {}) {
   const res = await fetch(`${API_BASE}${endpoint}`, {
     method: options.method || "GET",
     headers: {
+      "Content-Type": "application/json",
       ...(options.headers as Record<string, string>),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
