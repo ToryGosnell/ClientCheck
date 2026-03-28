@@ -31,6 +31,16 @@ async function startServer() {
     }
 
     const app = express();
+    console.log("[Cookie] session policy", {
+      cookieName: "app_session_id",
+      hostOnlyByDefault: !(process.env.COOKIE_DOMAIN ?? "").trim(),
+      configuredCookieDomain: (process.env.COOKIE_DOMAIN ?? "").trim() || null,
+      path: "/",
+      httpOnly: true,
+      secureInProduction: true,
+      sameSiteWhenSecure: "none",
+      sameSiteWhenNotSecure: "lax",
+    });
 
     try {
       const seeded = await seedAdminUserFromEnv();
@@ -68,6 +78,11 @@ async function startServer() {
       const origin = req.headers.origin;
       if (origin) {
         const allow = !isProd || staticOrigins.has(origin);
+        console.log("[CORS] request origin", {
+          origin,
+          allowed: allow,
+          production: isProd,
+        });
         if (allow) {
           res.setHeader("Access-Control-Allow-Origin", origin);
           res.append("Vary", "Origin");

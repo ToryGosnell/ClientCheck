@@ -2,6 +2,8 @@ import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 import { LEGACY_USER_INFO_KEY, SESSION_TOKEN_KEY, USER_INFO_KEY } from "@/constants/oauth";
 
+let inMemorySessionToken: string | null = null;
+
 export type User = {
   id: number;
   openId?: string | null;
@@ -46,11 +48,22 @@ export function userFromApiJson(raw: Record<string, unknown>): User {
 
 export async function getSessionToken(): Promise<string | null> {
   try {
-    if (Platform.OS === "web") {
-      // Web uses cookie-based auth; no manual token to retrieve
-      return null;
+    if (inMemorySessionToken) {
+      return inMemorySessionToken;
     }
-    return await SecureStore.getItemAsync(SESSION_TOKEN_KEY);
+    if (Platform.OS === "web") {
+      if (typeof window === "undefined") return null;
+      const stored = window.localStorage.getItem(SESSION_TOKEN_KEY);
+      if (stored) {
+        inMemorySessionToken = stored;
+      }
+      return stored;
+    }
+    const stored = await SecureStore.getItemAsync(SESSION_TOKEN_KEY);
+    if (stored) {
+      inMemorySessionToken = stored;
+    }
+    return stored;
   } catch (error) {
     console.warn("[Auth] Failed to get session token:", error);
     return null;
@@ -58,18 +71,28 @@ export async function getSessionToken(): Promise<string | null> {
 }
 
 export async function setSessionToken(token: string): Promise<void> {
+  inMemorySessionToken = token;
   try {
-    if (Platform.OS === "web") return;
+    if (Platform.OS === "web") {
+      if (typeof window === "undefined") return;
+      window.localStorage.setItem(SESSION_TOKEN_KEY, token);
+      return;
+    }
     await SecureStore.setItemAsync(SESSION_TOKEN_KEY, token);
   } catch (error) {
-    console.error("[Auth] Failed to set session token:", error);
-    throw error;
+    // Keep in-memory token so auth still works in this browser session.
+    console.warn("[Auth] Failed to persist session token:", error);
   }
 }
 
 export async function removeSessionToken(): Promise<void> {
+  inMemorySessionToken = null;
   try {
-    if (Platform.OS === "web") return;
+    if (Platform.OS === "web") {
+      if (typeof window === "undefined") return;
+      window.localStorage.removeItem(SESSION_TOKEN_KEY);
+      return;
+    }
     await SecureStore.deleteItemAsync(SESSION_TOKEN_KEY);
   } catch (error) {
     console.warn("[Auth] Failed to remove session token:", error);

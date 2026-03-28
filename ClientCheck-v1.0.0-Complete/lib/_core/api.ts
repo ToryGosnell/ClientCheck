@@ -1,34 +1,40 @@
-import { Platform } from "react-native";
-import { getApiBaseUrl } from "@/constants/oauth";
-import { ensureApiPrefix } from "@/lib/api";
-import * as Auth from "./auth";
+const SESSION_TOKEN_KEY = "app_session_token";
 
-export async function apiCall<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+function getSessionToken() {
+  if (typeof window !== "undefined") {
+    return localStorage.getItem(SESSION_TOKEN_KEY);
+  }
+  return null;
+}
+
+export async function apiCall(endpoint: string, options: RequestInit = {}) {
+  const token = getSessionToken();
+
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    ...((options.headers as Record<string, string>) || {}),
+    ...(options.headers as Record<string, string>),
   };
 
-  // Native: Bearer token auth. Web: cookie-based auth (browser handles automatically).
-  if (Platform.OS !== "web") {
-    const sessionToken = await Auth.getSessionToken();
-    if (sessionToken) {
-      headers["Authorization"] = `Bearer ${sessionToken}`;
-    }
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+    console.log("[AUTH] Using token:", token);
+  } else {
+    console.log("[AUTH] No token found");
   }
 
-  const baseUrl = getApiBaseUrl().replace(/\/$/, "");
-  const path = ensureApiPrefix(endpoint);
-  const url = `${baseUrl}${path}`;
-
-  const response = await fetch(url, {
+  const apiBase = (process.env.EXPO_PUBLIC_API_BASE_URL ?? "").replace(/\/$/, "");
+  const res = await fetch(`${apiBase}${endpoint}`, {
     ...options,
     headers,
     credentials: "include",
   });
 
-  if (!response.ok) {
-    const errorText = await response.text();
+  return res;
+}
+
+async function parseApiResponse<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const errorText = await res.text();
     let errorMessage = errorText;
     try {
       const errorJson = JSON.parse(errorText);
@@ -36,23 +42,24 @@ export async function apiCall<T>(endpoint: string, options: RequestInit = {}): P
     } catch {
       // Not JSON, use raw text
     }
-    throw new Error(errorMessage || `API call failed: ${response.statusText}`);
+    throw new Error(errorMessage || `API call failed: ${res.statusText}`);
   }
 
-  const contentType = response.headers.get("content-type");
-  if (contentType && contentType.includes("application/json")) {
-    return (await response.json()) as T;
+  const contentType = res.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    return (await res.json()) as T;
   }
 
-  const text = await response.text();
+  const text = await res.text();
   return (text ? JSON.parse(text) : {}) as T;
 }
 
 // Logout
 export async function logout(): Promise<void> {
-  await apiCall<void>("/api/auth/logout", {
+  const res = await apiCall("/api/auth/logout", {
     method: "POST",
   });
+  await parseApiResponse<{ success: boolean }>(res);
 }
 
 /** JSON shape for GET /api/auth/me → `{ user }` (datetimes as ISO 8601 strings). */
@@ -75,17 +82,35 @@ export type AuthResponse = {
   app_session_id?: string;
 };
 
-async function persistNativeSessionToken(result: AuthResponse): Promise<void> {
-  if (Platform.OS === "web") return;
-  const token = result.sessionToken ?? result.app_session_id ?? null;
-  if (token) {
-    await Auth.setSessionToken(token);
+function detectSessionToken(result: AuthResponse): string | null {
+  if (result.sessionToken) return result.sessionToken;
+  if (result.app_session_id) return result.app_session_id;
+  return null;
+}
+
+async function persistSessionToken(result: AuthResponse): Promise<void> {
+  const token = detectSessionToken(result);
+  const storageWriteAttempted = Boolean(token);
+  if (token && typeof window !== "undefined") {
+    localStorage.setItem(SESSION_TOKEN_KEY, token);
   }
+  const localStorageHasTokenAfterWrite =
+    typeof window !== "undefined"
+      ? Boolean(window.localStorage.getItem(SESSION_TOKEN_KEY))
+      : null;
+  console.log("[AUTH] token persistence", {
+    tokenDetected: Boolean(token),
+    storageWriteAttempted,
+    localStorageHasTokenAfterWrite,
+  });
 }
 
 export async function me(): Promise<MeUserJson | null> {
   try {
-    const result = await apiCall<{ user: MeUserJson | null }>("/api/auth/me");
+    const tokenBeforeMe = getSessionToken();
+    console.log("[AUTH] pre-/api/auth/me token check", { hasToken: Boolean(tokenBeforeMe) });
+    const res = await apiCall("/api/auth/me");
+    const result = await parseApiResponse<{ user: MeUserJson | null }>(res);
     return result.user ?? null;
   } catch (error) {
     // 401 / "Not authenticated" is expected when session expired — not a real error
@@ -108,50 +133,56 @@ export async function signup(input: {
   accountType?: "contractor" | "customer";
   legalAcceptanceVersion?: string;
 }): Promise<AuthResponse> {
-  const result = await apiCall<AuthResponse>("/api/auth/signup", {
+  const res = await apiCall("/api/auth/signup", {
     method: "POST",
     body: JSON.stringify(input),
   });
-  await persistNativeSessionToken(result);
+  const result = await parseApiResponse<AuthResponse>(res);
+  await persistSessionToken(result);
   return result;
 }
 
 export async function login(input: { email: string; password: string }): Promise<AuthResponse> {
-  const result = await apiCall<AuthResponse>("/api/auth/login", {
+  const res = await apiCall("/api/auth/login", {
     method: "POST",
     body: JSON.stringify(input),
   });
-  await persistNativeSessionToken(result);
+  const result = await parseApiResponse<AuthResponse>(res);
+  await persistSessionToken(result);
   return result;
 }
 
 export async function forgotPassword(email: string): Promise<{ success: boolean }> {
-  return apiCall<{ success: boolean }>("/api/auth/forgot-password", {
+  const res = await apiCall("/api/auth/forgot-password", {
     method: "POST",
     body: JSON.stringify({ email }),
   });
+  return parseApiResponse<{ success: boolean }>(res);
 }
 
 export async function resetPassword(input: {
   token: string;
   password: string;
 }): Promise<{ success: boolean }> {
-  return apiCall<{ success: boolean }>("/api/auth/reset-password", {
+  const res = await apiCall("/api/auth/reset-password", {
     method: "POST",
     body: JSON.stringify(input),
   });
+  return parseApiResponse<{ success: boolean }>(res);
 }
 
 export async function verifyEmail(token: string): Promise<{ success: boolean; error?: string }> {
-  return apiCall<{ success: boolean; error?: string }>("/api/auth/verify-email", {
+  const res = await apiCall("/api/auth/verify-email", {
     method: "POST",
     body: JSON.stringify({ token }),
   });
+  return parseApiResponse<{ success: boolean; error?: string }>(res);
 }
 
 export async function resendVerification(email?: string): Promise<{ success: boolean }> {
-  return apiCall<{ success: boolean }>("/api/auth/resend-verification", {
+  const res = await apiCall("/api/auth/resend-verification", {
     method: "POST",
     body: JSON.stringify(email ? { email } : {}),
   });
+  return parseApiResponse<{ success: boolean }>(res);
 }

@@ -21,6 +21,12 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+export function tokenFingerprint(token: string | null | undefined): string | null {
+  if (!token) return null;
+  const hashed = hashToken(token);
+  return `${hashed.slice(0, 10)}...${hashed.slice(-6)}`;
+}
+
 export function extractBearerOrCookieToken(req: Request): string | null {
   const authHeader = req.headers.authorization ?? req.headers.Authorization;
   if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
@@ -54,13 +60,28 @@ export async function createOpaqueSession(input: {
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + input.ttlMs);
 
-  await db.insert(sessions).values({
-    userId: input.userId,
-    tokenHash,
-    expiresAt,
-    ipAddress: input.ipAddress ?? null,
-    userAgent: input.userAgent ?? null,
-  });
+  try {
+    await db.insert(sessions).values({
+      userId: input.userId,
+      tokenHash,
+      expiresAt,
+      ipAddress: input.ipAddress ?? null,
+      userAgent: input.userAgent ?? null,
+    });
+    console.log("[AUTH STORE] write success", {
+      userId: input.userId,
+      keyFingerprint: tokenFingerprint(token),
+      expiresAt: expiresAt.toISOString(),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[AUTH STORE] write failure", {
+      userId: input.userId,
+      keyFingerprint: tokenFingerprint(token),
+      error: message,
+    });
+    throw error;
+  }
 
   return { token, expiresAt };
 }
@@ -76,7 +97,13 @@ export async function findValidSessionByToken(token: string): Promise<SessionRec
     .where(and(eq(sessions.tokenHash, tokenHash), isNull(sessions.revokedAt), gt(sessions.expiresAt, new Date())))
     .limit(1);
 
-  return (rows[0] as SessionRecord | undefined) ?? null;
+  const session = (rows[0] as SessionRecord | undefined) ?? null;
+  console.log("[AUTH STORE] read", {
+    keyFingerprint: tokenFingerprint(token),
+    hit: Boolean(session),
+    userId: session?.userId ?? null,
+  });
+  return session;
 }
 
 export async function touchSession(sessionId: number): Promise<void> {

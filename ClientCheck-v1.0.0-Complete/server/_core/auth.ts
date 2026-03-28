@@ -12,7 +12,13 @@ import {
   toPublicAuthUser,
   verifyEmailTokenAndMarkUser,
 } from "../auth-service";
-import { extractBearerOrCookieToken, findValidSessionByToken, revokeSessionByToken, touchSession } from "../session-service";
+import {
+  extractBearerOrCookieToken,
+  findValidSessionByToken,
+  revokeSessionByToken,
+  tokenFingerprint,
+  touchSession,
+} from "../session-service";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
 
@@ -63,10 +69,28 @@ function clearSessionCookie(req: Request, res: Response): void {
 
 function setSessionCookie(req: Request, res: Response, token: string): void {
   const cookieOptions = getSessionCookieOptions(req);
+  console.log("[Auth Cookie] set cookie options", {
+    cookieName: COOKIE_NAME,
+    hostOnly: !cookieOptions.domain,
+    domain: cookieOptions.domain ?? null,
+    path: cookieOptions.path,
+    httpOnly: cookieOptions.httpOnly,
+    sameSite: cookieOptions.sameSite,
+    secure: cookieOptions.secure,
+  });
   res.cookie(COOKIE_NAME, token, {
     ...cookieOptions,
     maxAge: getSessionTtlMs(),
   });
+}
+
+function getCookieNames(req: Request): string[] {
+  const raw = req.headers.cookie;
+  if (!raw) return [];
+  return raw
+    .split(";")
+    .map((part) => part.trim().split("=")[0]?.trim())
+    .filter((name): name is string => Boolean(name));
 }
 
 function getBodyKeys(req: Request): string[] {
@@ -160,6 +184,23 @@ export function registerFirstPartyAuthRoutes(app: Express): void {
         { email, password },
         { ipAddress: req.ip ?? null, userAgent: req.header("user-agent") ?? null },
       );
+      const savedSession = await findValidSessionByToken(sessionToken);
+      const origin = req.headers.origin ?? null;
+      console.log("[AUTH LOGIN] success", {
+        userId: user.id,
+        sessionId: savedSession?.id ?? null,
+        sessionCreated: Boolean(sessionToken),
+        sessionPersisted: Boolean(savedSession),
+        sessionFingerprint: tokenFingerprint(sessionToken),
+        responseOrigin: origin,
+      });
+      if (!savedSession) {
+        console.error("[AUTH LOGIN] session persistence failed", {
+          userId: user.id,
+          sessionFingerprint: tokenFingerprint(sessionToken),
+        });
+        return res.status(500).json({ error: "Session persistence failed" });
+      }
 
       setSessionCookie(req, res, sessionToken);
       return res.status(200).json({
@@ -173,20 +214,76 @@ export function registerFirstPartyAuthRoutes(app: Express): void {
         message,
         bodyKeys: getBodyKeys(req),
       });
-      return res.status(401).json({ error: message });
+      if (message === "Invalid credentials") {
+        return res.status(401).json({ error: message });
+      }
+      return res.status(500).json({ error: "Login failed" });
     }
   });
 
   app.post("/api/auth/logout", async (req: Request, res: Response) => {
     const token = extractBearerOrCookieToken(req);
+    const sessionBefore = token ? await findValidSessionByToken(token) : null;
+    let sessionDestroyed = false;
     if (token) {
       await revokeSessionByToken(token);
+      const sessionAfter = await findValidSessionByToken(token);
+      sessionDestroyed = sessionBefore != null && sessionAfter == null;
     }
+    console.log("[Auth] logout", {
+      hadToken: Boolean(token),
+      hadSessionBefore: Boolean(sessionBefore),
+      sessionFingerprint: tokenFingerprint(token),
+      sessionDestroyed,
+    });
     clearSessionCookie(req, res);
     res.status(200).json({ success: true });
   });
 
   const handleMe = async (req: Request, res: Response) => {
+    const cookieHeaderExists = Boolean(req.headers.cookie);
+    const cookieNames = getCookieNames(req);
+    const appSessionCookiePresent = cookieNames.includes(COOKIE_NAME);
+    const origin = req.headers.origin ?? null;
+    const authorizationHeaderRaw = req.headers.authorization ?? req.headers.Authorization;
+    const authorizationHeaderValue =
+      typeof authorizationHeaderRaw === "string" ? authorizationHeaderRaw.trim() : "";
+    const authorizationHeaderPresent = authorizationHeaderValue.length > 0;
+    const bearerHeaderPresent = /^Bearer\s+\S+/i.test(authorizationHeaderValue);
+    const token = extractBearerOrCookieToken(req);
+    const session = token ? await findValidSessionByToken(token) : null;
+    const authSource =
+      bearerHeaderPresent
+        ? "bearer"
+        : appSessionCookiePresent
+          ? "cookie"
+          : "none";
+    const diagnosis =
+      token && session
+        ? "session_found"
+        : !cookieHeaderExists
+        ? "cookie_not_sent"
+        : !token
+          ? "cookie_present_but_token_not_found"
+          : !session
+            ? "cookie_sent_but_session_not_found"
+            : "session_found";
+    console.log("[AUTH ME] session check", {
+      origin,
+      authSource,
+      authorizationHeaderPresent,
+      bearerHeaderPresent,
+      cookieHeaderExists,
+      rawCookieNames: cookieNames,
+      appSessionIdPresent: appSessionCookiePresent,
+      parsedTokenPresent: Boolean(token),
+      tokenFingerprint: tokenFingerprint(token),
+      tokenPresent: Boolean(token),
+      sessionResolved: Boolean(session),
+      sessionLookupResult: session ? "hit" : "miss",
+      resolvedUserId: session?.userId ?? null,
+      diagnosis,
+    });
     try {
       const user = await authenticateRequest(req);
       return res.status(200).json({ user: toPublicAuthUser(user) });

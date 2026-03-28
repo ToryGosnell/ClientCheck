@@ -4,6 +4,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { ScreenContainer } from "@/components/screen-container";
 import * as Api from "@/lib/_core/api";
 import * as Auth from "@/lib/_core/auth";
+import { SESSION_TOKEN_KEY } from "@/constants/oauth";
 import { setSelectedAccountType } from "@/lib/account-type";
 import { setPostLoginRedirect, consumePostLoginRedirect } from "@/lib/post-login-redirect";
 import { resolvePostLoginDestination } from "@/lib/resolve-post-login-destination";
@@ -45,6 +46,29 @@ export default function LoginScreen() {
       await setSelectedAccountType(accountType);
 
       const result = await Api.login({ email: email.trim(), password });
+      const data = result as { sessionToken?: string };
+      if (typeof window !== "undefined" && data?.sessionToken) {
+        localStorage.setItem("app_session_token", data.sessionToken);
+      }
+      const explicitToken =
+        typeof result.sessionToken === "string" && result.sessionToken.trim().length > 0
+          ? result.sessionToken
+          : typeof result.app_session_id === "string" && result.app_session_id.trim().length > 0
+            ? result.app_session_id
+            : null;
+      const storageWriteAttempted = Boolean(explicitToken);
+      if (explicitToken) {
+        await Auth.setSessionToken(explicitToken);
+      }
+      const localStorageHasTokenAfterWrite =
+        typeof window !== "undefined"
+          ? Boolean(window.localStorage.getItem(SESSION_TOKEN_KEY))
+          : null;
+      console.log("[Auth Login Screen] token persistence check", {
+        tokenDetected: Boolean(explicitToken),
+        storageWriteAttempted,
+        localStorageHasTokenAfterWrite,
+      });
       const userInfo = Auth.userFromApiJson(result.user as unknown as Record<string, unknown>);
       await Auth.setUserInfo(userInfo);
       await navigateAfterLogin();

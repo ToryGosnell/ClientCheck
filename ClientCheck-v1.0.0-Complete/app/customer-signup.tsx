@@ -70,6 +70,10 @@ export default function CustomerSignupScreen() {
         accountType: "customer",
         legalAcceptanceVersion: LEGAL_ACCEPTANCE_VERSION,
       });
+      const data = result as { sessionToken?: string };
+      if (typeof window !== "undefined" && data?.sessionToken) {
+        localStorage.setItem("app_session_token", data.sessionToken);
+      }
       const userInfo = Auth.userFromApiJson(result.user as unknown as Record<string, unknown>);
       await Auth.setUserInfo(userInfo);
       await tryApplyPendingContractorInviteReferral();
