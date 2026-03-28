@@ -60,47 +60,87 @@ async function startServer() {
       res.status(200).json({ status: "ok" });
     });
 
-    const isProd = process.env.NODE_ENV === "production";
-    const staticOrigins = new Set([
+    const exactAllowedOrigins = new Set([
+      "https://dist-web-alpha.vercel.app",
       "http://localhost:8081",
       "http://localhost:19006",
       "http://localhost:3000",
-      "https://dist-web-alpha.vercel.app",
     ]);
-    const extraOrigins = (process.env.FRONTEND_URL ?? "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    for (const o of extraOrigins) staticOrigins.add(o);
 
-    // CORS + credentials: in production only allowlisted origins; in dev reflect any Origin for Expo/tunnels.
+    function isAllowedVercelPreview(origin: string) {
+      try {
+        const url = new URL(origin);
+        const isAnyVercelHost = /^([a-zA-Z0-9-]+\.)?vercel\.app$/.test(url.hostname);
+        return (
+          isAnyVercelHost ||
+          /^https:\/\/dist-[a-zA-Z0-9-]+\.vercel\.app$/.test(origin) ||
+          /^https:\/\/dist-web-[a-zA-Z0-9-]+\.vercel\.app$/.test(origin) ||
+          /^https:\/\/dist-[a-zA-Z0-9-]+-tmtaom-6429s-projects\.vercel\.app$/.test(origin)
+        );
+      } catch {
+        return false;
+      }
+    }
+
+    const corsOptions = {
+      origin(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
+        if (!origin) {
+          console.log("[CORS] No origin header -> allow");
+          return callback(null, true);
+        }
+
+        const allowed = exactAllowedOrigins.has(origin) || isAllowedVercelPreview(origin);
+        console.log("[CORS] Origin:", origin, "Allowed:", allowed);
+
+        if (allowed) return callback(null, true);
+        return callback(new Error(`CORS blocked for origin: ${origin}`));
+      },
+      credentials: true,
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowedHeaders: [
+        "Origin",
+        "X-Requested-With",
+        "Content-Type",
+        "Accept",
+        "Authorization",
+        "x-user-id",
+        "x-user-role",
+        "x-api-key",
+        "x-clientcheck-mode",
+        "x-request-id",
+        "trpc-accept",
+      ],
+    };
+
     app.use((req, res, next) => {
-      const origin = req.headers.origin;
-      if (origin) {
-        const allow = !isProd || staticOrigins.has(origin);
-        console.log("[CORS] request origin", {
-          origin,
-          allowed: allow,
-          production: isProd,
-        });
-        if (allow) {
-          res.setHeader("Access-Control-Allow-Origin", origin);
+      const requestOrigin = req.headers.origin;
+      corsOptions.origin(requestOrigin, (err, allow) => {
+        if (err || !allow) {
+          if (req.method === "OPTIONS") {
+            res.status(403).json({ error: err?.message ?? "CORS blocked" });
+            return;
+          }
+          next(err ?? new Error("CORS blocked"));
+          return;
+        }
+
+        if (requestOrigin) {
+          res.setHeader("Access-Control-Allow-Origin", requestOrigin);
           res.append("Vary", "Origin");
         }
-      }
-      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
-      res.setHeader(
-        "Access-Control-Allow-Headers",
-        "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-user-id, x-user-role, x-api-key, x-clientcheck-mode, x-request-id, trpc-accept",
-      );
-      res.setHeader("Access-Control-Allow-Credentials", "true");
-      res.setHeader("Access-Control-Max-Age", "86400");
+        res.setHeader("Access-Control-Allow-Methods", corsOptions.methods.join(", "));
+        res.setHeader("Access-Control-Allow-Headers", corsOptions.allowedHeaders.join(", "));
+        if (corsOptions.credentials) {
+          res.setHeader("Access-Control-Allow-Credentials", "true");
+        }
+        res.setHeader("Access-Control-Max-Age", "86400");
 
-      if (req.method === "OPTIONS") {
-        res.sendStatus(204);
-        return;
-      }
-      next();
+        if (req.method === "OPTIONS") {
+          res.sendStatus(204);
+          return;
+        }
+        next();
+      });
     });
 
     // Stripe webhooks: MUST use raw body only — never attach express.json() (or any JSON body parser)
