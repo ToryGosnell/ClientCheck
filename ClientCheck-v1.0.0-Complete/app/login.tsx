@@ -55,11 +55,14 @@ export default function LoginScreen() {
           password,
         }),
       });
-      const result = (await loginResponse.json()) as Api.AuthResponse;
-      const data = result as { sessionToken?: string };
-      if (typeof window !== "undefined" && data?.sessionToken) {
+      const data = (await loginResponse.json()) as Api.AuthResponse;
+      if (data && data.sessionToken) {
+        console.log("[AUTH] Saving token:", data.sessionToken);
         localStorage.setItem("app_session_token", data.sessionToken);
+      } else {
+        console.log("[AUTH] No sessionToken in response", data);
       }
+      const result = data;
       const explicitToken =
         typeof result.sessionToken === "string" && result.sessionToken.trim().length > 0
           ? result.sessionToken
